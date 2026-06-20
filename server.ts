@@ -137,6 +137,9 @@ if (vapidPublicKey && vapidPrivateKey) {
 }
 
 async function startServer() {
+  // Eagerly initialize Firebase Admin
+  getAdminDb();
+
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
