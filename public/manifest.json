@@ -1,0 +1,41 @@
+{
+  "short_name": "RetivoX",
+  "name": "RetivoX: Digital Loyalty",
+  "description": "Replace your paper stamp cards with a digital loyalty wallet. Join programs, collect stamps, and earn rewards at your favorite cafes and gyms.",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#3d2b1f",
+  "background_color": "#ffffff",
+  "categories": ["business", "lifestyle", "shopping"],
+  "screenshots": [
+    {
+      "src": "https://picsum.photos/seed/retivox1/1080/1920",
+      "sizes": "1080x1920",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Digital Wallet"
+    },
+    {
+      "src": "https://picsum.photos/seed/retivox2/1920/1080",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Partner Dashboard"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "13093267291",
+    "project_id": "project-6829774a-7e85-47bf-bab",
+    "storage_bucket": "project-6829774a-7e85-47bf-bab.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:13093267291:android:c6fd94d90aa14b85179c7e",
+        "android_client_info": {
+          "package_name": "com.retivox.loyalty"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBzrclSfrvkTQP4F9LVrKI6iFysjjvDtMg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

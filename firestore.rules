@@ -1,0 +1,185 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny Catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isAdminEmail() { 
+      return isSignedIn() && 
+             request.auth.token.email.lower() == "anoopjoy1988@gmail.com" &&
+             request.auth.token.email_verified == true;
+    }
+    
+    // Auth Role Helpers
+    function isAdmin() {
+      return isAdminEmail() || (
+        isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+    
+    function isPartner() {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'partner')
+      );
+    }
+
+    // --- Entity Validation Blueprints ---
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'name', 'role']) &&
+             data.uid == request.auth.uid &&
+             data.role in ['customer', 'partner', 'admin'];
+    }
+
+    function isValidBusiness(data) {
+      return data.keys().hasAll(['name', 'type', 'ownerId', 'createdAt']) &&
+             data.name is string && data.name.size() <= 100 &&
+             data.type in ['cafe', 'gym'] &&
+             data.ownerId == request.auth.uid &&
+             data.createdAt == request.time;
+    }
+
+    function isValidProgram(data) {
+      return data.keys().hasAll(['businessId', 'title', 'itemName', 'goal', 'reward', 'isActive', 'createdAt']) &&
+             data.businessId is string &&
+             data.title is string && data.title.size() <= 100 &&
+             data.itemName is string && data.itemName.size() <= 50 &&
+             data.goal is number && data.goal > 0 && data.goal <= 100 &&
+             data.reward is string && data.reward.size() <= 200 &&
+             data.isActive is bool &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidLoyaltyCard(data) {
+      return data.keys().hasAll(['userId', 'programId', 'businessId', 'businessOwnerId', 'businessName', 'programTitle', 'itemName', 'goal', 'currentStamps', 'lastUpdated']) &&
+             data.userId == request.auth.uid &&
+             data.programId is string &&
+             data.businessId is string &&
+             data.businessOwnerId is string &&
+             data.businessName is string &&
+             data.programTitle is string &&
+             data.itemName is string &&
+             data.goal is number &&
+             data.currentStamps is number && data.currentStamps >= 0 &&
+             data.lastUpdated == request.time;
+    }
+
+    function isValidLoyaltyCardUpdate(data, existing) {
+      return data.keys().hasAll(['userId', 'programId', 'businessId', 'businessOwnerId', 'businessName', 'programTitle', 'itemName', 'goal', 'currentStamps', 'lastUpdated']) &&
+             data.userId == existing.userId &&
+             data.programId == existing.programId &&
+             data.businessId == existing.businessId &&
+             data.businessOwnerId == existing.businessOwnerId &&
+             data.businessName is string && data.businessName.size() <= 100 &&
+             data.programTitle is string && data.programTitle.size() <= 100 &&
+             data.itemName is string && data.itemName.size() <= 50 &&
+             data.goal == existing.goal &&
+             data.currentStamps is number && data.currentStamps >= 0 &&
+             data.lastUpdated == request.time &&
+             (!('isCompleted' in data) || data.isCompleted is bool);
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['targetId', 'targetType', 'reporterId', 'reason', 'createdAt']) &&
+             data.targetId is string && data.targetId.size() <= 100 &&
+             data.targetType in ['business', 'program', 'user', 'card'] &&
+             data.reporterId == request.auth.uid &&
+             data.reason is string && data.reason.size() <= 500 &&
+             data.createdAt == request.time;
+    }
+
+    function isValidAdminSubscription(data) {
+      return data.keys().hasAll(['platform', 'updatedAt']) &&
+             data.platform in ['web', 'native'] &&
+             data.updatedAt is timestamp &&
+             (!('fcmToken' in data) || data.fcmToken == null || (data.fcmToken is string && data.fcmToken.size() <= 300)) &&
+             (!('subscription' in data) || data.subscription == null || data.subscription is map);
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) || isAdmin()) && 
+                    isValidUser(request.resource.data) && 
+                    (request.resource.data.role == resource.data.role || isAdminEmail());
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    match /businesses/{businessId} {
+      allow read: if isSignedIn();
+      allow create: if isPartner() && isValidBusiness(request.resource.data);
+      allow update: if (isAdmin() || (resource.data.ownerId == request.auth.uid)) && 
+                    isValidBusiness(request.resource.data) &&
+                    request.resource.data.ownerId == resource.data.ownerId &&
+                    request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAdmin();
+    }
+
+    match /programs/{programId} {
+      allow read: if isSignedIn();
+      allow create: if (isAdmin() || (exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)) && 
+                                     get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerId == request.auth.uid)) &&
+                    isValidProgram(request.resource.data);
+      allow update: if (isAdmin() || (exists(/databases/$(database)/documents/businesses/$(resource.data.businessId)) && 
+                                     get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.ownerId == request.auth.uid)) &&
+                    isValidProgram(request.resource.data) &&
+                    request.resource.data.businessId == resource.data.businessId &&
+                    request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAdmin() || 
+                    (exists(/databases/$(database)/documents/businesses/$(resource.data.businessId)) && 
+                     get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.ownerId == request.auth.uid);
+    }
+
+    match /loyaltyCards/{cardId} {
+      // Split list rules for better query coverage
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.businessOwnerId == request.auth.uid;
+      allow list: if isAdmin();
+
+      allow get: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || 
+        resource.data.businessOwnerId == request.auth.uid ||
+        (exists(/databases/$(database)/documents/businesses/$(resource.data.businessId)) && 
+         get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.ownerId == request.auth.uid) || 
+        isAdmin()
+      );
+      
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid && isValidLoyaltyCard(request.resource.data);
+      
+      allow update: if isSignedIn() && 
+                    isValidLoyaltyCardUpdate(request.resource.data, resource.data) && (
+                      (resource.data.userId == request.auth.uid && request.resource.data.currentStamps == resource.data.currentStamps) ||
+                      (exists(/databases/$(database)/documents/businesses/$(resource.data.businessId)) && 
+                       get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.ownerId == request.auth.uid) ||
+                      isAdmin()
+                    );
+
+      allow delete: if isAdmin() || 
+                    resource.data.userId == request.auth.uid || 
+                    resource.data.businessOwnerId == request.auth.uid;
+    }
+
+    match /reports/{reportId} {
+      allow get, list: if isAdmin();
+      allow create: if isSignedIn() && isValidReport(request.resource.data);
+    }
+
+    match /admin_subscriptions/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create, update: if isOwner(userId) && isAdmin() && isValidAdminSubscription(request.resource.data);
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+  }
+}

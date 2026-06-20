@@ -1,0 +1,113 @@
+{
+  "entities": {
+    "Business": {
+      "title": "Business",
+      "description": "A partner business (cafe/gym)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["cafe", "gym"] },
+        "ownerId": { "type": "string", "description": "User ID of the partner who owns this business" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "location": { "type": "string" },
+        "contactNumber": { "type": "string" },
+        "logoUrl": { "type": "string" }
+      },
+      "required": ["name", "type", "ownerId"]
+    },
+    "LoyaltyProgram": {
+      "title": "Loyalty Program",
+      "description": "A specific reward program offered by a business",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "title": { "type": "string", "description": "e.g., Coffee Card" },
+        "itemName": { "type": "string", "description": "e.g., Coffee, Snack" },
+        "description": { "type": "string" },
+        "goal": { "type": "number", "description": "Stamps needed" },
+        "reward": { "type": "string", "description": "What they get" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["businessId", "title", "itemName", "goal", "reward"]
+    },
+    "LoyaltyCard": {
+      "title": "Loyalty Card",
+      "description": "User's progress in a specific program",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "programId": { "type": "string" },
+        "businessId": { "type": "string" },
+        "businessName": { "type": "string" },
+        "businessLogo": { "type": "string" },
+        "programTitle": { "type": "string" },
+        "itemName": { "type": "string" },
+        "goal": { "type": "number" },
+        "currentStamps": { "type": "number" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "programId", "businessId", "businessName", "programTitle", "itemName", "goal", "currentStamps"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile with roles",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["customer", "partner", "admin"] }
+      },
+      "required": ["uid", "name", "email", "role"]
+    },
+    "AdminSubscription": {
+      "title": "Admin Subscription",
+      "description": "Web Push subscription for admin notifications",
+      "type": "object",
+      "properties": {
+        "subscription": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["subscription", "updatedAt"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "User report for offensive content",
+      "type": "object",
+      "properties": {
+        "targetId": { "type": "string", "description": "ID of the business or program being reported" },
+        "targetType": { "type": "string", "enum": ["business", "program"] },
+        "reporterId": { "type": "string" },
+        "reason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["targetId", "targetType", "reporterId", "reason", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/businesses/{businessId}": {
+      "schema": "Business",
+      "description": "Partner businesses"
+    },
+    "/programs/{programId}": {
+      "schema": "LoyaltyProgram",
+      "description": "Loyalty programs created by partners"
+    },
+    "/loyaltyCards/{cardId}": {
+      "schema": "LoyaltyCard",
+      "description": "User progress cards"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/admin_subscriptions/{userId}": {
+      "schema": "AdminSubscription",
+      "description": "Web push subscriptions for admins"
+    },
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "User reports for moderation"
+    }
+  }
+}

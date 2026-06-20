@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+@theme {
+  --color-coffee-dark: #3d2b1f;
+  --color-coffee-light: #c4a484;
+  --color-coffee-cream: #f5f1ed;
+  --color-coffee-accent: #8d6e63;
+}

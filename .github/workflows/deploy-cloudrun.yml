@@ -1,0 +1,73 @@
+name: Deploy to Google Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID || 'project-6829774a-7e85-47bf-bab' }}
+  SERVICE_NAME: retivox
+  REGION: us-central1
+
+jobs:
+  deploy:
+    name: Build and Deploy to Cloud Run
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Authenticate with Google Cloud
+      - name: Google Auth
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # 2. Set up Cloud SDK
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # 3. Configure Docker for Artifact Registry
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      # 4. Create Artifact Registry repository if it doesn't exist
+      - name: Create Artifact Registry Repo
+        run: |
+          gcloud artifacts repositories create retivox-repo \
+            --repository-format=docker \
+            --location=us-central1 \
+            --description="Docker repository for RetivoX" \
+            --quiet || true
+
+      # 5. Build and Push Docker Image
+      # We pass VITE_FCM_VAPID_KEY as a build argument so Vite compiles it into the frontend bundle.
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/retivox-repo/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          build-args: |
+            VITE_FCM_VAPID_KEY=${{ secrets.VITE_FCM_VAPID_KEY }}
+
+      # 6. Deploy to Google Cloud Run
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/retivox-repo/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          # Pass runtime environment variables to the Cloud Run service
+          env_vars: |
+            NODE_ENV=production
+            PORT=8080
+            VITE_FCM_VAPID_KEY=${{ secrets.VITE_FCM_VAPID_KEY }}
+            VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }}
+            GOOGLE_WALLET_ISSUER_ID=${{ secrets.GOOGLE_WALLET_ISSUER_ID }}
+            GOOGLE_WALLET_SERVICE_ACCOUNT_KEY=${{ secrets.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY }}
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}

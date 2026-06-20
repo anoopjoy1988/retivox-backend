@@ -1,0 +1,18 @@
+# Directories to ignore
+node_modules/
+dist/
+android/
+.git/
+.github/
+.vscode/
+.agents/
+.antigravity/
+resources/
+
+# Files to ignore
+.env
+firebase-debug.log
+firebase-debug.*.log
+*.md
+Dockerfile
+.dockerignore
