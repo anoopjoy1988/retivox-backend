@@ -3419,6 +3419,13 @@ export default function App() {
                                     })
                                   });
                                   const data = await response.json();
+                                  
+                                  if (!response.ok) {
+                                    setAppError(data.error || "Failed to generate wallet pass.");
+                                    setTimeout(() => setAppError(null), 5000);
+                                    return;
+                                  }
+
                                   if (data.message) {
                                     setSaveSuccess(data.message);
                                     setTimeout(() => setSaveSuccess(null), 5000);
