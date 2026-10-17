@@ -1056,7 +1056,8 @@ export default function App() {
           uid: user.uid,
           name: isOwner ? 'Anoop Joy' : (user.displayName || 'Guest User'),
           email: user.email || '',
-          role: isOwner ? 'admin' : 'partner'
+          // Security rules only allow 'admin' for the verified owner email
+          role: isOwner && user.emailVerified ? 'admin' : 'partner'
         };
         setDoc(userRef, newProfile).catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${user.uid}`));
       }
@@ -1287,6 +1288,14 @@ export default function App() {
 
         // Verify role for admin
         if (authRole === 'admin') {
+          if (!cred.user.emailVerified) {
+            // Admin access requires a verified email (enforced by security rules)
+            try { await sendEmailVerification(cred.user); } catch (vErr) { console.warn("Verification email send failed:", vErr); }
+            await signOut(auth);
+            setAppError("Your admin email is not verified yet. We've sent a verification link to " + cred.user.email + " (check Spam too). Click it, then log in again — or use 'Continue with Google'.");
+            setIsProcessing(false);
+            return;
+          }
           const uDoc = await getDoc(doc(db, 'users', cred.user.uid));
           if (!uDoc.exists() || uDoc.data().role !== 'admin' || cred.user.email?.toLowerCase() !== 'anoopjoy1988@gmail.com') {
             await signOut(auth);
@@ -1323,12 +1332,23 @@ export default function App() {
         }
 
         const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        // New password accounts are unverified, and rules only allow 'admin' for the verified owner.
+        // Start as 'partner'; the owner is upgraded to admin on first login after verifying.
+        const isAdminSignup = authRole === 'admin';
         await setDoc(doc(db, 'users', cred.user.uid), {
           uid: cred.user.uid,
           name: cleanName,
           email: cleanEmail,
-          role: authRole
+          role: isAdminSignup ? 'partner' : authRole
         });
+        if (isAdminSignup) {
+          try { await sendEmailVerification(cred.user); } catch (vErr) { console.warn("Verification email send failed:", vErr); }
+          await signOut(auth);
+          setSaveSuccess("Account created! Verify your email using the link we sent to " + cleanEmail + ", then log in to access the Admin Portal.");
+          setAuthView('login');
+          setIsProcessing(false);
+          return;
+        }
         if (authRole === 'admin') {
           setIsAdminMode(true);
           setActiveTab('admin_home');

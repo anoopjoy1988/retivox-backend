@@ -194,6 +194,12 @@ async function startServer() {
     user?: admin.auth.DecodedIdToken;
   }
 
+  // Admin is ONLY the owner email, and only when Firebase has verified it.
+  // Never trust the 'role' field in Firestore for admin decisions (users can write their own profile).
+  const OWNER_EMAIL = "anoopjoy1988@gmail.com";
+  const isVerifiedOwner = (user?: admin.auth.DecodedIdToken) =>
+    !!user && user.email?.toLowerCase() === OWNER_EMAIL && user.email_verified === true;
+
   const requireAuth = async (req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -217,13 +223,10 @@ async function startServer() {
     }
 
     try {
-      const email = req.user.email?.toLowerCase();
-      const isAdminEmail = email === "anoopjoy1988@gmail.com";
-
-      if (isAdminEmail) {
+      if (isVerifiedOwner(req.user)) {
         next();
       } else {
-        res.status(403).json({ error: "Forbidden: Administrator privileges are strictly restricted to anoopjoy1988@gmail.com" });
+        res.status(403).json({ error: "Forbidden: Administrator privileges require the verified owner account." });
       }
     } catch (err) {
       console.error("Admin verification error:", err);
@@ -237,16 +240,14 @@ async function startServer() {
     }
 
     try {
-      const email = req.user.email?.toLowerCase();
-      const isAdminEmail = email === "anoopjoy1988@gmail.com";
-
       const db = getAdminDb();
-      let isAllowed = isAdminEmail;
+      let isAllowed = isVerifiedOwner(req.user);
       
       if (!isAllowed && db) {
         const uDoc = await db.collection("users").doc(req.user.uid).get();
         if (uDoc.exists) {
           const role = uDoc.data()?.role;
+          // A stored 'admin' role grants no more than partner-level access here
           if (role === "admin" || role === "partner") {
             isAllowed = true;
           }
@@ -584,17 +585,10 @@ async function startServer() {
           if (cardDoc.exists) {
             cardData = cardDoc.data();
             
-            const email = req.user?.email?.toLowerCase();
-            const isAdminEmail = email === "anoopjoy1988@gmail.com";
-            let isRoleAdmin = false;
-            
-            const uDoc = await db.collection("users").doc(req.user!.uid).get();
-            if (uDoc.exists && uDoc.data()?.role === "admin") {
-              isRoleAdmin = true;
-            }
+            const isOwnerAdmin = isVerifiedOwner(req.user);
 
-            // Verify ownership: must be the card owner, business owner, or admin
-            if (cardData?.userId !== req.user?.uid && cardData?.businessOwnerId !== req.user?.uid && !isAdminEmail && !isRoleAdmin) {
+            // Verify ownership: must be the card owner, business owner, or the verified owner admin
+            if (cardData?.userId !== req.user?.uid && cardData?.businessOwnerId !== req.user?.uid && !isOwnerAdmin) {
               return res.status(403).json({ error: "Forbidden: You do not have permission to generate this pass." });
             }
             isVerified = true;

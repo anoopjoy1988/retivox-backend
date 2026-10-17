@@ -11,7 +11,8 @@ service cloud.firestore {
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function isAdminEmail() { 
       return isSignedIn() && 
-             request.auth.token.email.lower() == "anoopjoy1988@gmail.com";
+             request.auth.token.email.lower() == "anoopjoy1988@gmail.com" &&
+             request.auth.token.email_verified == true;
     }
     
     // Auth Role Helpers
@@ -31,7 +32,9 @@ service cloud.firestore {
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'name', 'role']) &&
              data.uid == request.auth.uid &&
-             data.role in ['customer', 'partner', 'admin'];
+             data.role in ['customer', 'partner', 'admin'] &&
+             // Only the verified owner may hold the 'admin' role
+             (data.role != 'admin' || isAdminEmail());
     }
 
     function isValidBusiness(data) {
