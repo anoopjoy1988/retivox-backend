@@ -220,20 +220,10 @@ async function startServer() {
       const email = req.user.email?.toLowerCase();
       const isAdminEmail = email === "anoopjoy1988@gmail.com";
 
-      const db = getAdminDb();
-      let isRoleAdmin = false;
-      
-      if (db) {
-        const uDoc = await db.collection("users").doc(req.user.uid).get();
-        if (uDoc.exists && uDoc.data()?.role === "admin") {
-          isRoleAdmin = true;
-        }
-      }
-
-      if (isAdminEmail || isRoleAdmin) {
+      if (isAdminEmail) {
         next();
       } else {
-        res.status(403).json({ error: "Forbidden: Administrator privileges required" });
+        res.status(403).json({ error: "Forbidden: Administrator privileges are strictly restricted to anoopjoy1988@gmail.com" });
       }
     } catch (err) {
       console.error("Admin verification error:", err);

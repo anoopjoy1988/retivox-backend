@@ -28,7 +28,12 @@ import {
   sendEmailVerification,
   signOut, 
   setPersistence, 
-  indexedDBLocalPersistence
+  indexedDBLocalPersistence,
+  GoogleAuthProvider,
+  signInWithPopup,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,
+  signInWithEmailLink
 } from 'firebase/auth';
 import { 
   collection, query, where, onSnapshot, doc, setDoc, updateDoc, getDoc, getDocs,
@@ -343,6 +348,8 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [authMethod, setAuthMethod] = useState<'magic' | 'password'>('magic');
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
 
   // Create refs to keep track of state in Capacitor backButton listener without recreating the listener
   const userRef = useRef(user);
@@ -396,6 +403,58 @@ export default function App() {
     showDeleteConfirm, showReportModal, justJoined, stampSuccess, stampError,
     saveSuccess
   ]);
+
+  // --- Listen for incoming Email Magic Link on load ---
+  useEffect(() => {
+    const checkEmailLinkSignIn = async () => {
+      try {
+        if (isSignInWithEmailLink(auth, window.location.href)) {
+          setIsProcessing(true);
+          let emailToUse = window.localStorage.getItem('retivox_email_for_signin');
+          if (!emailToUse) {
+            emailToUse = window.prompt('Please confirm your email address to complete sign in:');
+          }
+          if (emailToUse) {
+            const cred = await signInWithEmailLink(auth, emailToUse.trim(), window.location.href);
+            window.localStorage.removeItem('retivox_email_for_signin');
+            const targetRole = window.localStorage.getItem('retivox_auth_role') || 'partner';
+            window.localStorage.removeItem('retivox_auth_role');
+
+            const loggedEmail = cred.user.email?.toLowerCase() || '';
+            if (targetRole === 'admin' && loggedEmail !== 'anoopjoy1988@gmail.com') {
+              await signOut(auth);
+              setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized for the Admin Portal.");
+              setIsProcessing(false);
+              return;
+            }
+
+            if (loggedEmail === 'anoopjoy1988@gmail.com') {
+              setIsAdminMode(true);
+              setActiveTab('admin_home');
+            } else {
+              setIsAdminMode(false);
+              setActiveTab('partner');
+            }
+            setHasSetInitialTab(true);
+            setSaveSuccess(`Welcome back, ${cred.user.email}!`);
+            setTimeout(() => setSaveSuccess(null), 4000);
+
+            // Clean up the URL to prevent re-triggering the email link
+            if (window.history && window.history.replaceState) {
+              window.history.replaceState({}, document.title, window.location.pathname);
+            }
+          }
+          setIsProcessing(false);
+        }
+      } catch (err: any) {
+        console.error("Magic link sign-in error:", err);
+        setAppError(err.message || "Failed to sign in with email link.");
+        setIsProcessing(false);
+      }
+    };
+
+    checkEmailLinkSignIn();
+  }, []);
 
   // --- Handle App State & Hardware Back Button (Option 1 - Clean App Exit) ---
   useEffect(() => {
@@ -1122,12 +1181,91 @@ export default function App() {
     return unsub;
   }, [user, businesses, isAdminMode, selectedAdminBizId, activeTab]);
 
+  // 1-Tap Device Account Sign-In (Google)
+  const handleGoogleSignIn = async () => {
+    setAppError(null);
+    setIsProcessing(true);
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const cred = await signInWithPopup(auth, provider);
+      const userEmail = cred.user.email?.toLowerCase() || '';
+
+      if (authRole === 'admin') {
+        if (userEmail !== 'anoopjoy1988@gmail.com') {
+          await signOut(auth);
+          setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized as Administrator.");
+          setIsProcessing(false);
+          return;
+        }
+        setIsAdminMode(true);
+        setActiveTab('admin_home');
+      } else {
+        setIsAdminMode(false);
+        setActiveTab('partner');
+      }
+      setHasSetInitialTab(true);
+    } catch (e: any) {
+      if (e.code === 'auth/popup-closed-by-user') {
+        console.info("Google Sign-in popup closed by user.");
+      } else {
+        console.error("Google sign in error:", e);
+        setAppError(e.message || "Failed to sign in with device account.");
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Passwordless Email Confirmation Link Sign-In
+  const handleSendMagicLink = async () => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setAppError("Please enter your email address.");
+      return;
+    }
+
+    if (authRole === 'admin' && cleanEmail.toLowerCase() !== 'anoopjoy1988@gmail.com') {
+      setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized for the Admin Portal.");
+      return;
+    }
+
+    setAppError(null);
+    setIsProcessing(true);
+    try {
+      const actionCodeSettings = {
+        url: window.location.origin + window.location.pathname,
+        handleCodeInApp: true,
+      };
+      await sendSignInLinkToEmail(auth, cleanEmail, actionCodeSettings);
+      window.localStorage.setItem('retivox_email_for_signin', cleanEmail);
+      window.localStorage.setItem('retivox_auth_role', authRole);
+      setMagicLinkSent(true);
+      setSaveSuccess(`Confirmation link sent to ${cleanEmail}! Please check your email inbox to log in.`);
+    } catch (e: any) {
+      console.error("Send email link error:", e);
+      let msg = e.message;
+      if (e.code === 'auth/invalid-email') {
+        msg = "Please enter a valid email address.";
+      }
+      setAppError(msg || "Failed to send confirmation link.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleAuth = async () => {
     setAppError(null);
     setIsProcessing(true);
 
     try {
       if (authView === 'login') {
+        if (authRole === 'admin' && email.trim().toLowerCase() !== 'anoopjoy1988@gmail.com') {
+          setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized for the Admin Portal.");
+          setIsProcessing(false);
+          return;
+        }
+
         const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
         
         // --- Owner Auto-Upgrade ---
@@ -1150,7 +1288,7 @@ export default function App() {
         // Verify role for admin
         if (authRole === 'admin') {
           const uDoc = await getDoc(doc(db, 'users', cred.user.uid));
-          if (!uDoc.exists() || uDoc.data().role !== 'admin') {
+          if (!uDoc.exists() || uDoc.data().role !== 'admin' || cred.user.email?.toLowerCase() !== 'anoopjoy1988@gmail.com') {
             await signOut(auth);
             setAppError("Access Denied: You do not have administrator privileges.");
             setIsProcessing(false);
@@ -1174,6 +1312,12 @@ export default function App() {
         
         if (!cleanName || !cleanEmail || !password) {
           setAppError("All fields are required for signup.");
+          setIsProcessing(false);
+          return;
+        }
+
+        if (authRole === 'admin' && cleanEmail.toLowerCase() !== 'anoopjoy1988@gmail.com') {
+          setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized as Administrator.");
           setIsProcessing(false);
           return;
         }
@@ -1840,7 +1984,9 @@ export default function App() {
                     setEmail('');
                     setPassword('');
                     setDisplayName('');
-                  }}
+                    setMagicLinkSent(false);
+                    setAuthMethod('magic');
+                  }} 
                   className="p-2 -ml-2 text-gray-400 hover:text-gray-600 active:scale-90 transition-all"
                 >
                   <X size={20} />
@@ -1849,124 +1995,270 @@ export default function App() {
               <h2 className="font-black text-xl text-gray-900 tracking-tight">
                 {authView === 'forgot' ? 'Reset Password' : 
                  authView === 'signup' ? 'Create Account' : 
-                 authRole === 'admin' ? 'Admin Login' : 'Partner Login'}
+                 authRole === 'admin' ? 'Admin Portal' : 'Partner Portal'}
               </h2>
             </div>
 
-            <div className="space-y-3">
-              {authView === 'forgot' && (
-                <div className="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2 mb-2">
-                  <AlertCircle size={16} className="text-blue-500 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-[10px] text-blue-700 leading-tight font-bold">
-                      Check your Spam/Junk folder!
-                    </p>
-                    <p className="text-[10px] text-blue-600 leading-tight">
-                      Firebase emails often get flagged. Add our sender address to your contacts to prevent this.
-                    </p>
-                  </div>
+            {authView === 'login' && authRole === 'admin' && (
+              <div className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-2xl flex items-start gap-2.5 mb-2">
+                <ShieldCheck size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-[11px] font-bold text-amber-900 leading-tight">Admin Authorization Required</p>
+                  <p className="text-[10px] text-amber-700 leading-tight mt-0.5">
+                    This portal is strictly restricted to <span className="font-bold underline">anoopjoy1988@gmail.com</span>.
+                  </p>
                 </div>
-              )}
+              </div>
+            )}
 
-              {authView === 'signup' && (
+            {authView === 'login' && authRole === 'partner' && (
+              <p className="text-xs text-gray-500 mb-1 leading-relaxed">
+                Log in instantly with your device's account, or enter any email to receive a confirmation link.
+              </p>
+            )}
+
+            {authView === 'login' ? (
+              <div className="space-y-3">
+                {/* 1-Tap Device Account Login */}
+                <button 
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={isProcessing}
+                  className="w-full py-3.5 bg-white border border-gray-200 text-gray-800 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-[0_4px_12px_rgba(0,0,0,0.06)] hover:bg-gray-50 active:scale-95 transition-all text-sm group"
+                >
+                  <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
+                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.15C3.26 21.36 7.33 24 12 24z"/>
+                    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.24C.45 8.16 0 9.94 0 12s.45 3.84 1.24 5.42l4.04-3.15z"/>
+                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.24 6.58l4.04 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+                  </svg>
+                  <span>
+                    {authRole === 'admin' 
+                      ? 'Continue with Google (anoopjoy1988@gmail.com)' 
+                      : 'Continue with Device Account'}
+                  </span>
+                </button>
+
+                <div className="flex items-center gap-3 my-2">
+                  <div className="h-[1px] bg-gray-200 flex-1"></div>
+                  <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">or email confirmation</span>
+                  <div className="h-[1px] bg-gray-200 flex-1"></div>
+                </div>
+
+                {authMethod === 'magic' ? (
+                  <div className="space-y-3">
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">
+                        {authRole === 'admin' ? 'Admin Email' : 'Email Address'}
+                      </label>
+                      <input 
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder={authRole === 'admin' ? "anoopjoy1988@gmail.com" : "name@example.com"}
+                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
+                      />
+                    </div>
+
+                    <button 
+                      type="button"
+                      onClick={handleSendMagicLink}
+                      disabled={isProcessing}
+                      className="w-full py-3 bg-coffee-dark text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(61,43,31,0.15)] active:scale-95 disabled:opacity-50 transition-all text-sm"
+                    >
+                      {isProcessing ? (
+                        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full" />
+                      ) : (
+                        <>
+                          <Mail size={18} />
+                          Send Confirmation Link
+                        </>
+                      )}
+                    </button>
+
+                    {magicLinkSent && (
+                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2">
+                        <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                        <p className="text-[11px] text-emerald-800 leading-tight">
+                          Confirmation link sent to <strong>{email}</strong>! Check your inbox (or spam) and click the link to sign in.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Email Address</label>
+                      <input 
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder={authRole === 'admin' ? "anoopjoy1988@gmail.com" : "name@example.com"}
+                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Password</label>
+                      <div className="relative">
+                        <input 
+                          type={showPassword ? "text" : "password"}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
+                        />
+                        <button 
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button 
+                      onClick={handleAuth}
+                      disabled={isProcessing}
+                      className="w-full py-3 bg-coffee-dark text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(61,43,31,0.15)] active:scale-95 disabled:opacity-50 transition-all text-sm"
+                    >
+                      {isProcessing ? (
+                        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full" />
+                      ) : (
+                        <>
+                          <LogIn size={18} /> Sign In with Password
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {biometricsEnabled && (
+                  <button 
+                    onClick={handleBiometricLogin}
+                    disabled={isProcessing}
+                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(16,185,129,0.2)] active:scale-95 disabled:opacity-50 transition-all text-sm"
+                  >
+                    <Fingerprint size={18} />
+                    Sign In with Fingerprint
+                  </button>
+                )}
+
+                <div className="flex flex-col items-center gap-2 pt-1">
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setAuthMethod(authMethod === 'magic' ? 'password' : 'magic');
+                      setAppError(null);
+                    }}
+                    className="text-xs font-semibold text-gray-500 hover:text-coffee-dark underline-offset-4 active:scale-95 transition-all"
+                  >
+                    {authMethod === 'magic' ? 'Or sign in with password' : 'Use email confirmation link instead'}
+                  </button>
+
+                  {authRole !== 'admin' && (
+                    <button 
+                      onClick={() => setAuthView('signup')}
+                      className="text-xs font-bold text-coffee-accent hover:text-coffee-dark underline-offset-4 active:scale-95 transition-all"
+                    >
+                      New partner? Create an account
+                    </button>
+                  )}
+
+                  <button 
+                    onClick={() => setAuthView('forgot')}
+                    className="text-[10px] font-medium text-gray-400 hover:text-gray-600 active:scale-95 transition-all"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {authView === 'forgot' && (
+                  <div className="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2 mb-2">
+                    <AlertCircle size={16} className="text-blue-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-[10px] text-blue-700 leading-tight font-bold">Check your Spam/Junk folder!</p>
+                      <p className="text-[10px] text-blue-600 leading-tight">
+                        Password reset emails may be flagged. Check all folders.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {authView === 'signup' && (
+                  <div className="space-y-0.5">
+                    <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Full Name</label>
+                    <input 
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="Enter your name"
+                      className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
+                    />
+                  </div>
+                )}
+
                 <div className="space-y-0.5">
-                  <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Full Name</label>
+                  <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Email Address</label>
                   <input 
-                    type="text"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Enter your name"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="name@example.com"
                     className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
                   />
                 </div>
-              )}
 
-              <div className="space-y-0.5">
-                <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Email Address</label>
-                <input 
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
-                />
-              </div>
-
-              {authView !== 'forgot' && (
-                <div className="space-y-0.5">
-                  <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Password</label>
-                  <div className="relative">
-                    <input 
-                      type={showPassword ? "text" : "password"}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
-                    />
-                    <button 
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
+                {authView !== 'forgot' && (
+                  <div className="space-y-0.5">
+                    <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Password</label>
+                    <div className="relative">
+                      <input 
+                        type={showPassword ? "text" : "password"}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
+                      />
+                      <button 
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
                   </div>
+                )}
+
+                <button 
+                  onClick={handleAuth}
+                  disabled={isProcessing}
+                  className="w-full py-3 bg-coffee-dark text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(61,43,31,0.15)] active:scale-95 disabled:opacity-50 transition-all mt-3 text-sm"
+                >
+                  {isProcessing ? (
+                    <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full" />
+                  ) : (
+                    <>
+                      <LogIn size={18} />
+                      {authView === 'signup' ? 'Create Account' : 'Send Reset Link'}
+                    </>
+                  )}
+                </button>
+
+                <div className="flex flex-col items-center gap-2 pt-1">
+                  <button 
+                    onClick={() => setAuthView('login')}
+                    className="text-xs font-bold text-coffee-accent hover:text-coffee-dark underline-offset-4 active:scale-95 transition-all"
+                  >
+                    Back to login
+                  </button>
                 </div>
-              )}
-            </div>
-
-            <button 
-              onClick={handleAuth}
-              disabled={isProcessing}
-              className="w-full py-3 bg-coffee-dark text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(61,43,31,0.15)] active:scale-95 disabled:opacity-50 transition-all mt-3 text-sm"
-            >
-              {isProcessing ? (
-                 <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full" />
-              ) : (
-                <>
-                  <LogIn size={18} />
-                  {authView === 'login' ? 'Sign In' : authView === 'signup' ? 'Create Account' : 'Send Reset Link'}
-                </>
-              )}
-            </button>
-            
-            {authView === 'login' && biometricsEnabled && (
-              <button 
-                onClick={handleBiometricLogin}
-                disabled={isProcessing}
-                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(16,185,129,0.2)] active:scale-95 disabled:opacity-50 transition-all mt-2 text-sm"
-              >
-                <Fingerprint size={18} />
-                Sign In with Fingerprint
-              </button>
+              </div>
             )}
-
-            <div className="flex flex-col items-center gap-2 pt-1">
-              {authView === 'login' && authRole !== 'admin' && (
-                <button 
-                  onClick={() => setAuthView('signup')}
-                  className="text-xs font-bold text-coffee-accent hover:text-coffee-dark underline-offset-4 active:scale-95 transition-all"
-                >
-                  New here? Create a Partner account
-                </button>
-              )}
-              {authView === 'login' && (
-                <button 
-                  onClick={() => setAuthView('forgot')}
-                  className="text-[10px] font-medium text-gray-400 hover:text-gray-600 active:scale-95 transition-all"
-                >
-                  Forgot password?
-                </button>
-              )}
-              {(authView === 'signup' || authView === 'forgot') && (
-                <button 
-                  onClick={() => setAuthView('login')}
-                  className="text-xs font-bold text-coffee-accent hover:text-coffee-dark underline-offset-4 active:scale-95 transition-all"
-                >
-                  Back to login
-                </button>
-              )}
-            </div>
           </motion.div>
         )}
 

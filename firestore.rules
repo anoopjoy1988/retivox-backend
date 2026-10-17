@@ -11,17 +11,12 @@ service cloud.firestore {
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function isAdminEmail() { 
       return isSignedIn() && 
-             request.auth.token.email.lower() == "anoopjoy1988@gmail.com" &&
-             request.auth.token.email_verified == true;
+             request.auth.token.email.lower() == "anoopjoy1988@gmail.com";
     }
     
     // Auth Role Helpers
     function isAdmin() {
-      return isAdminEmail() || (
-        isSignedIn() && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-      );
+      return isAdminEmail();
     }
     
     function isPartner() {
