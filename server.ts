@@ -77,16 +77,24 @@ function getAdminDb() {
     
     if (!admin.apps.length) {
       try {
-        admin.initializeApp({
-          credential: admin.credential.applicationDefault(),
-          projectId: firebaseConfig.projectId
-        });
+        if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+          admin.initializeApp({
+            credential: admin.credential.applicationDefault(),
+            projectId: firebaseConfig.projectId
+          });
+        } else {
+          admin.initializeApp({
+            projectId: firebaseConfig.projectId
+          });
+        }
         console.log(`Firebase Admin initialized for project: ${firebaseConfig.projectId}`);
       } catch (credentialError) {
-        console.warn("Failed to initialize with applicationDefault, falling back to projectId only. This may cause PERMISSION_DENIED if not running in the same project environment.", credentialError);
-        admin.initializeApp({
-          projectId: firebaseConfig.projectId
-        });
+        console.warn("Firebase Admin init fallback:", credentialError);
+        try {
+          admin.initializeApp({
+            projectId: firebaseConfig.projectId
+          });
+        } catch (e) {}
       }
     }
     

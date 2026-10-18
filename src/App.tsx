@@ -11,7 +11,7 @@ import {
   ChevronRight, Star, Clock, MapPin, CheckCircle2, AlertCircle, AlertTriangle, Flag,
   LayoutDashboard, Users, Store, PlusCircle, BarChart3, ShieldCheck, ShieldAlert,
   Smartphone, Scan, X, Edit2, Trash2, Mail, Trophy, Power, ExternalLink,
-  Eye, EyeOff, Fingerprint, Download, Sparkles, RefreshCw
+  Eye, EyeOff, Fingerprint, Download, Sparkles, RefreshCw, KeyRound, RotateCcw, Lock
 } from 'lucide-react';
 import { 
   isBiometricsAvailable, 
@@ -318,7 +318,7 @@ export default function App() {
   const [isDeletingCafe, setIsDeletingCafe] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.1');
+  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.2');
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -375,11 +375,15 @@ export default function App() {
   const [authRole, setAuthRole] = useState<'admin' | 'partner'>(
     HIDE_PARTNER_PORTAL ? 'admin' : 'partner'
   );
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [authMethod, setAuthMethod] = useState<'magic' | 'password'>('magic');
-  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [showPin, setShowPin] = useState(false);
+
+  // 6-digit PIN used directly as secure authentication credential (matches Firebase 6-char requirement)
+  const pinToSecret = (pinCode: string): string => pinCode.trim();
 
   // Create refs to keep track of state in Capacitor backButton listener without recreating the listener
   const userRef = useRef(user);
@@ -395,6 +399,7 @@ export default function App() {
   const selectedAdminBizIdRef = useRef(selectedAdminBizId);
   const showBusinessSettingsRef = useRef(showBusinessSettings);
   const showSignOutConfirmRef = useRef(showSignOutConfirm);
+  const hasTriggeredStartupBiometric = useRef(false);
   const showTermsRef = useRef(showTerms);
   const showPrivacyRef = useRef(showPrivacy);
   const showDeleteConfirmRef = useRef(showDeleteConfirm);
@@ -434,57 +439,6 @@ export default function App() {
     saveSuccess
   ]);
 
-  // --- Listen for incoming Email Magic Link on load ---
-  useEffect(() => {
-    const checkEmailLinkSignIn = async () => {
-      try {
-        if (isSignInWithEmailLink(auth, window.location.href)) {
-          setIsProcessing(true);
-          let emailToUse = window.localStorage.getItem('retivox_email_for_signin');
-          if (!emailToUse) {
-            emailToUse = window.prompt('Please confirm your email address to complete sign in:');
-          }
-          if (emailToUse) {
-            const cred = await signInWithEmailLink(auth, emailToUse.trim(), window.location.href);
-            window.localStorage.removeItem('retivox_email_for_signin');
-            const targetRole = window.localStorage.getItem('retivox_auth_role') || 'partner';
-            window.localStorage.removeItem('retivox_auth_role');
-
-            const loggedEmail = cred.user.email?.toLowerCase() || '';
-            if (targetRole === 'admin' && loggedEmail !== 'anoopjoy1988@gmail.com') {
-              await signOut(auth);
-              setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized for the Admin Portal.");
-              setIsProcessing(false);
-              return;
-            }
-
-            if (loggedEmail === 'anoopjoy1988@gmail.com') {
-              setIsAdminMode(true);
-              setActiveTab('admin_home');
-            } else {
-              setIsAdminMode(false);
-              setActiveTab('partner');
-            }
-            setHasSetInitialTab(true);
-            setSaveSuccess(`Welcome back, ${cred.user.email}!`);
-            setTimeout(() => setSaveSuccess(null), 4000);
-
-            // Clean up the URL to prevent re-triggering the email link
-            if (window.history && window.history.replaceState) {
-              window.history.replaceState({}, document.title, window.location.pathname);
-            }
-          }
-          setIsProcessing(false);
-        }
-      } catch (err: any) {
-        console.error("Magic link sign-in error:", err);
-        setAppError(err.message || "Failed to sign in with email link.");
-        setIsProcessing(false);
-      }
-    };
-
-    checkEmailLinkSignIn();
-  }, []);
 
   // --- Handle App State & Hardware Back Button (Option 1 - Clean App Exit) ---
   useEffect(() => {
@@ -1301,74 +1255,57 @@ export default function App() {
     return unsub;
   }, [user, businesses, isAdminMode, selectedAdminBizId, activeTab]);
 
-  // 1-Tap Device Account Sign-In (Google)
-  const handleGoogleSignIn = async () => {
-    setAppError(null);
+  // Wipe entire database to provide a fresh, clean app (Admin-only action)
+  const handleCleanDatabase = async () => {
+    if (!window.confirm("ARE YOU SURE? This will permanently delete ALL data (users, businesses, programs, loyalty cards, reports, and usernames) from the database to give you a clean slate.")) {
+      return;
+    }
     setIsProcessing(true);
     try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
-      const cred = await signInWithPopup(auth, provider);
-      const userEmail = cred.user.email?.toLowerCase() || '';
-
-      if (authRole === 'admin') {
-        if (userEmail !== 'anoopjoy1988@gmail.com') {
-          await signOut(auth);
-          setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized as Administrator.");
-          setIsProcessing(false);
-          return;
+      const collectionsToClean = [
+        'loyaltyCards',
+        'programs',
+        'businesses',
+        'reports',
+        'admin_subscriptions',
+        'usernames'
+      ];
+      let deletedCount = 0;
+      for (const col of collectionsToClean) {
+        try {
+          const snap = await getDocs(collection(db, col));
+          for (const d of snap.docs) {
+            await deleteDoc(doc(db, col, d.id));
+            deletedCount++;
+          }
+        } catch (colErr) {
+          console.warn(`Error cleaning collection ${col}:`, colErr);
         }
-        setIsAdminMode(true);
-        setActiveTab('admin_home');
-      } else {
-        setIsAdminMode(false);
-        setActiveTab('partner');
       }
-      setHasSetInitialTab(true);
-    } catch (e: any) {
-      if (e.code === 'auth/popup-closed-by-user') {
-        console.info("Google Sign-in popup closed by user.");
-      } else {
-        console.error("Google sign in error:", e);
-        setAppError(e.message || "Failed to sign in with device account.");
+      // Clean users except current admin
+      try {
+        const uSnap = await getDocs(collection(db, 'users'));
+        for (const d of uSnap.docs) {
+          if (d.id !== auth.currentUser?.uid) {
+            await deleteDoc(doc(db, 'users', d.id));
+            deletedCount++;
+          }
+        }
+      } catch (uErr) {
+        console.warn("Error cleaning users:", uErr);
       }
-    } finally {
-      setIsProcessing(false);
-    }
-  };
 
-  // Passwordless Email Confirmation Link Sign-In
-  const handleSendMagicLink = async () => {
-    const cleanEmail = email.trim();
-    if (!cleanEmail) {
-      setAppError("Please enter your email address.");
-      return;
-    }
+      // Also clear local biometric storage & credentials
+      await disableBiometrics();
+      localStorage.clear();
 
-    if (authRole === 'admin' && cleanEmail.toLowerCase() !== 'anoopjoy1988@gmail.com') {
-      setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized for the Admin Portal.");
-      return;
-    }
-
-    setAppError(null);
-    setIsProcessing(true);
-    try {
-      const actionCodeSettings = {
-        url: window.location.origin + window.location.pathname,
-        handleCodeInApp: true,
-      };
-      await sendSignInLinkToEmail(auth, cleanEmail, actionCodeSettings);
-      window.localStorage.setItem('retivox_email_for_signin', cleanEmail);
-      window.localStorage.setItem('retivox_auth_role', authRole);
-      setMagicLinkSent(true);
-      setSaveSuccess(`Confirmation link sent to ${cleanEmail}! Please check your email inbox to log in.`);
-    } catch (e: any) {
-      console.error("Send email link error:", e);
-      let msg = e.message;
-      if (e.code === 'auth/invalid-email') {
-        msg = "Please enter a valid email address.";
-      }
-      setAppError(msg || "Failed to send confirmation link.");
+      setSaveSuccess(`Database cleaned! Removed ${deletedCount} records. App is now completely fresh.`);
+      setTimeout(() => {
+        window.location.reload();
+      }, 2500);
+    } catch (err: any) {
+      console.error("Clean database failed:", err);
+      setAppError("Clean database failed: " + (err.message || err));
     } finally {
       setIsProcessing(false);
     }
@@ -1380,26 +1317,68 @@ export default function App() {
 
     try {
       if (authView === 'login') {
-        if (authRole === 'admin' && email.trim().toLowerCase() !== 'anoopjoy1988@gmail.com') {
+        const cleanIdentifier = username.trim().toLowerCase();
+        const cleanPin = pin.trim();
+
+        if (!cleanIdentifier || !cleanPin) {
+          setAppError("Please enter your username (or email) and 6-digit PIN.");
+          setIsProcessing(false);
+          return;
+        }
+
+        if (cleanPin.length !== 6 || !/^\d{6}$/.test(cleanPin)) {
+          setAppError("PIN code must be exactly 6 digits.");
+          setIsProcessing(false);
+          return;
+        }
+
+        let resolvedEmail = '';
+        if (cleanIdentifier.includes('@')) {
+          resolvedEmail = cleanIdentifier;
+        } else {
+          // Resolve email from short username lookup
+          try {
+            const uSnap = await getDoc(doc(db, 'usernames', cleanIdentifier));
+            if (!uSnap.exists()) {
+              setAppError(`Username "${cleanIdentifier}" not found. Please check spelling or create an account.`);
+              setIsProcessing(false);
+              return;
+            }
+            resolvedEmail = (uSnap.data().email || '').toLowerCase().trim();
+          } catch (lookupErr: any) {
+            console.error("Username lookup error:", lookupErr);
+            setAppError("Unable to verify username. You can also sign in using your registered email address.");
+            setIsProcessing(false);
+            return;
+          }
+        }
+
+        if (!resolvedEmail) {
+          setAppError("Could not resolve account for this username. Please try your email address.");
+          setIsProcessing(false);
+          return;
+        }
+
+        // Strict Admin Portal Authorization
+        if (authRole === 'admin' && resolvedEmail !== 'anoopjoy1988@gmail.com') {
           setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized for the Admin Portal.");
           setIsProcessing(false);
           return;
         }
 
-        const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const cred = await signInWithEmailAndPassword(auth, resolvedEmail, cleanPin);
         
         // --- Owner Auto-Upgrade ---
-        const adminEmails = ['anoopjoy1988@gmail.com'];
-        if (adminEmails.includes(cred.user.email?.toLowerCase() || '')) {
+        if (cred.user.email?.toLowerCase() === 'anoopjoy1988@gmail.com') {
           console.log("Admin Auto-Upgrade triggered for:", cred.user.email);
           try {
             await setDoc(doc(db, 'users', cred.user.uid), {
               uid: cred.user.uid,
               email: cred.user.email,
               name: cred.user.displayName || cred.user.email?.split('@')[0] || 'Admin',
+              username: cleanIdentifier.includes('@') ? (cred.user.displayName || 'admin').toLowerCase() : cleanIdentifier,
               role: 'admin'
             }, { merge: true });
-            console.log("Admin role sync successful");
           } catch (syncErr) {
             console.warn("Minor sync error (likely already admin):", syncErr);
           }
@@ -1407,18 +1386,10 @@ export default function App() {
 
         // Verify role for admin
         if (authRole === 'admin') {
-          if (!cred.user.emailVerified) {
-            // Admin access requires a verified email (enforced by security rules)
-            try { await sendEmailVerification(cred.user); } catch (vErr) { console.warn("Verification email send failed:", vErr); }
-            await signOut(auth);
-            setAppError("Your admin email is not verified yet. We've sent a verification link to " + cred.user.email + " (check Spam too). Click it, then log in again — or use 'Continue with Google'.");
-            setIsProcessing(false);
-            return;
-          }
           const uDoc = await getDoc(doc(db, 'users', cred.user.uid));
           if (!uDoc.exists() || uDoc.data().role !== 'admin' || cred.user.email?.toLowerCase() !== 'anoopjoy1988@gmail.com') {
             await signOut(auth);
-            setAppError("Access Denied: You do not have administrator privileges.");
+            setAppError("Access Denied: Only anoopjoy1988@gmail.com has administrator privileges.");
             setIsProcessing(false);
             return;
           }
@@ -1430,45 +1401,81 @@ export default function App() {
         }
 
         if (biometricsAvailable && !biometricsEnabled) {
-          setPromoEmail(email.trim());
-          setPromoPassword(password);
+          setPromoEmail(resolvedEmail);
+          setPromoPassword(cleanPin);
           setShowBiometricPromo(true);
         }
       } else if (authView === 'signup') {
         const cleanName = displayName.trim();
-        const cleanEmail = email.trim();
-        
-        if (!cleanName || !cleanEmail || !password) {
-          setAppError("All fields are required for signup.");
+        const cleanUsername = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+        const cleanEmail = email.trim().toLowerCase();
+        const cleanPin = pin.trim();
+        const cleanConfirmPin = confirmPin.trim();
+
+        if (!cleanName || !cleanUsername || !cleanEmail || !cleanPin) {
+          setAppError("All fields (Full Name, Short Username, Email, and 6-Digit PIN) are required.");
           setIsProcessing(false);
           return;
         }
 
-        if (authRole === 'admin' && cleanEmail.toLowerCase() !== 'anoopjoy1988@gmail.com') {
+        if (cleanUsername.length < 3) {
+          setAppError("Username must be at least 3 characters (letters, numbers, underscores).");
+          setIsProcessing(false);
+          return;
+        }
+
+        if (cleanPin.length !== 6 || !/^\d{6}$/.test(cleanPin)) {
+          setAppError("PIN code must be exactly 6 digits.");
+          setIsProcessing(false);
+          return;
+        }
+
+        if (cleanPin !== cleanConfirmPin) {
+          setAppError("PIN and Confirm PIN do not match.");
+          setIsProcessing(false);
+          return;
+        }
+
+        // Strict Admin Signup Authorization
+        if (authRole === 'admin' && cleanEmail !== 'anoopjoy1988@gmail.com') {
           setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized as Administrator.");
           setIsProcessing(false);
           return;
         }
 
-        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-        // New password accounts are unverified, and rules only allow 'admin' for the verified owner.
-        // Start as 'partner'; the owner is upgraded to admin on first login after verifying.
-        const isAdminSignup = authRole === 'admin';
+        // Verify username uniqueness
+        try {
+          const uDoc = await getDoc(doc(db, 'usernames', cleanUsername));
+          if (uDoc.exists()) {
+            setAppError(`The username "${cleanUsername}" is already taken. Please choose another username.`);
+            setIsProcessing(false);
+            return;
+          }
+        } catch (uErr) {
+          console.warn("Username availability check notice:", uErr);
+        }
+
+        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPin);
+        const isAdminSignup = authRole === 'admin' || cleanEmail === 'anoopjoy1988@gmail.com';
+
         await setDoc(doc(db, 'users', cred.user.uid), {
           uid: cred.user.uid,
           name: cleanName,
+          username: cleanUsername,
           email: cleanEmail,
-          role: isAdminSignup ? 'partner' : authRole
+          role: isAdminSignup ? 'admin' : authRole,
+          createdAt: serverTimestamp()
         });
+
+        // Reserve short username
+        await setDoc(doc(db, 'usernames', cleanUsername), {
+          uid: cred.user.uid,
+          email: cleanEmail,
+          username: cleanUsername,
+          createdAt: serverTimestamp()
+        });
+
         if (isAdminSignup) {
-          try { await sendEmailVerification(cred.user); } catch (vErr) { console.warn("Verification email send failed:", vErr); }
-          await signOut(auth);
-          setSaveSuccess("Account created! Verify your email using the link we sent to " + cleanEmail + ", then log in to access the Admin Portal.");
-          setAuthView('login');
-          setIsProcessing(false);
-          return;
-        }
-        if (authRole === 'admin') {
           setIsAdminMode(true);
           setActiveTab('admin_home');
         } else {
@@ -1478,43 +1485,70 @@ export default function App() {
 
         if (biometricsAvailable && !biometricsEnabled) {
           setPromoEmail(cleanEmail);
-          setPromoPassword(password);
+          setPromoPassword(cleanPin);
           setShowBiometricPromo(true);
         }
       } else if (authView === 'forgot') {
-        const cleanEmail = email.trim();
-        if (!cleanEmail) {
-          setAppError("Please enter your email address.");
-          setIsProcessing(false);
-          return;
+        let cleanEmail = '';
+        if (authRole === 'admin') {
+          const inputVal = (email.trim() || username.trim() || 'anoopjoy1988@gmail.com').toLowerCase();
+          if (inputVal === 'anoopjoy1988@gmail.com') {
+            cleanEmail = 'anoopjoy1988@gmail.com';
+          } else if (!inputVal.includes('@')) {
+            try {
+              const uSnap = await getDoc(doc(db, 'usernames', inputVal));
+              if (uSnap.exists() && (uSnap.data().email || '').toLowerCase() === 'anoopjoy1988@gmail.com') {
+                cleanEmail = 'anoopjoy1988@gmail.com';
+              }
+            } catch (err) {
+              console.warn("Admin username check:", err);
+            }
+          }
+          if (cleanEmail !== 'anoopjoy1988@gmail.com') {
+            setAppError("Access Denied: Only anoopjoy1988@gmail.com is authorized to reset the Admin PIN.");
+            setIsProcessing(false);
+            return;
+          }
+        } else {
+          const inputVal = username.trim().toLowerCase() || email.trim().toLowerCase();
+          if (!inputVal) {
+            setAppError("Please enter your short username or email address.");
+            setIsProcessing(false);
+            return;
+          }
+          cleanEmail = inputVal;
+          if (!cleanEmail.includes('@')) {
+            const uSnap = await getDoc(doc(db, 'usernames', cleanEmail));
+            if (uSnap.exists()) {
+              cleanEmail = (uSnap.data().email || '').toLowerCase();
+            } else {
+              setAppError(`No account found for username "${inputVal}". Please enter your registered email address.`);
+              setIsProcessing(false);
+              return;
+            }
+          }
         }
+
         await sendPasswordResetEmail(auth, cleanEmail);
-        setSaveSuccess(`Check your email! A reset link was sent to: ${cleanEmail}. IMPORTANT: If you don't see it, please check your SPAM folder.`);
-        // Give the user time to read the confirmation before switching views
+        setSaveSuccess(`Reset link sent to: ${cleanEmail}! Open the email, enter your new 6-digit PIN code, then come back here to log in.`);
         setTimeout(() => {
           setAuthView('login');
           setSaveSuccess(null);
-        }, 8000);
+        }, 10000);
       }
       setHasSetInitialTab(true);
     } catch (e: any) {
-      if (e.code === 'auth/invalid-credential' || e.code === 'auth/user-not-found' || e.code === 'auth/wrong-password') {
-        console.info("Handled authentication validation event cleanly:", e.code);
-      } else {
-        console.warn("Auth event handled:", e.code || e.message || e);
-      }
+      console.warn("Auth event handled:", e.code || e.message || e);
       let msg = e.message;
       if (e.code === 'auth/user-not-found') {
-        msg = "Account not found. Please check your email or click 'Create Account'.";
+        msg = "Account not found. Please check your username/email or click 'Create Account'.";
       } else if (e.code === 'auth/wrong-password') {
-        msg = "Incorrect password. If you forgot it, try the 'Forgot Password' link.";
+        msg = "Incorrect 6-digit PIN. If you forgot your PIN, use the reset link below.";
       } else if (e.code === 'auth/email-already-in-use') {
-        msg = "An account with this email already exists. Please go back and Log In instead of signing up.";
+        msg = "An account with this email already exists. Please log in with your username and 6-digit PIN.";
         setAuthView('login');
       } else if (e.code === 'auth/invalid-credential') {
-        msg = "Incorrect email address or password. Please double-check your credentials and try again, or create a new account.";
-      } else if (e.toString().includes('error-code:-26') || e.code?.includes('-26')) {
-        msg = "Network or Domain Error (Code -26): This often happens when the browser blocks authentication inside a preview window. If this persists, please open the application in a New Tab using the button in the top right.";
+        msg = "Incorrect username/email or 6-digit PIN. Please double-check your credentials.";
       }
       setAppError(msg);
     } finally {
@@ -1576,9 +1610,10 @@ export default function App() {
     }
   };
 
-  // Auto-trigger biometric prompt on startup if enabled and user is not logged in
+  // Auto-trigger biometric prompt on startup if enabled and user is not logged in (runs only once on initial launch)
   useEffect(() => {
-    if (!isSplashing && !loading && !user && biometricsEnabled) {
+    if (!isSplashing && !loading && !user && biometricsEnabled && !hasTriggeredStartupBiometric.current) {
+      hasTriggeredStartupBiometric.current = true;
       const timer = setTimeout(() => {
         handleBiometricLogin();
       }, 500);
@@ -1593,9 +1628,11 @@ export default function App() {
     setHasSetInitialTab(false);
     setActiveTab('explore');
     setAuthView('main');
+    setUsername('');
     setEmail('');
-    setPassword('');
-    setShowPassword(false);
+    setPin('');
+    setConfirmPin('');
+    setShowPin(false);
     setTimeout(() => setIsSplashing(false), 2500);
   };
 
@@ -1755,18 +1792,22 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    setShowSignOutConfirm(false);
     try {
-      setIsSplashing(true);
+      hasTriggeredStartupBiometric.current = true;
       await signOut(auth);
-      setShowSignOutConfirm(false);
       setIsAdminMode(false);
       setSelectedAdminBizId(null);
-      setActiveTab('explore');
+      setHasSetInitialTab(false);
+      setActiveTab('partner');
       setAuthView('main');
+      setUsername('');
       setEmail('');
-      setPassword('');
-      setShowPassword(false);
-      setTimeout(() => setIsSplashing(false), 2500);
+      setPin('');
+      setConfirmPin('');
+      setShowPin(false);
+      setAppError(null);
+      setSaveSuccess(null);
     } catch (e) {
       console.error("Error signing out:", e);
     }
@@ -2119,7 +2160,13 @@ export default function App() {
           <>
             {!HIDE_PARTNER_PORTAL && (
               <button 
-                onClick={() => { setAuthView('login'); setAuthRole('partner'); }} 
+                onClick={() => { 
+                  setAuthView('login'); 
+                  setAuthRole('partner'); 
+                  setUsername('');
+                  setPin('');
+                  setAppError(null);
+                }} 
                 className="w-full py-5 bg-coffee-dark text-white rounded-[1.5rem] font-bold flex items-center justify-center gap-3 shadow-[0_10px_25px_rgba(61,43,31,0.25)] active:scale-95 transition-all text-lg"
               >
                 <LogIn size={22} /> Partner Portal
@@ -2128,7 +2175,13 @@ export default function App() {
             
             {!HIDE_ADMIN_PORTAL && (
               <button 
-                onClick={() => { setAuthView('login'); setAuthRole('admin'); }} 
+                onClick={() => { 
+                  setAuthView('login'); 
+                  setAuthRole('admin'); 
+                  setUsername('anoopjoy1988@gmail.com');
+                  setPin('');
+                  setAppError(null);
+                }} 
                 className="w-full py-5 bg-coffee-accent text-white rounded-[1.5rem] font-bold flex items-center justify-center gap-3 shadow-[0_10px_25px_rgba(141,110,99,0.25)] active:scale-95 transition-all text-lg"
               >
                 <ShieldCheck size={22} /> Admin Portal
@@ -2147,11 +2200,12 @@ export default function App() {
                   onClick={() => { 
                     setAuthView('main'); 
                     setAppError(null);
+                    setUsername('');
                     setEmail('');
-                    setPassword('');
+                    setPin('');
+                    setConfirmPin('');
                     setDisplayName('');
-                    setMagicLinkSent(false);
-                    setAuthMethod('magic');
+                    setShowPin(false);
                   }} 
                   className="p-2 -ml-2 text-gray-400 hover:text-gray-600 active:scale-90 transition-all"
                 >
@@ -2159,7 +2213,7 @@ export default function App() {
                 </button>
               )}
               <h2 className="font-black text-xl text-gray-900 tracking-tight">
-                {authView === 'forgot' ? 'Reset Password' : 
+                {authView === 'forgot' ? (authRole === 'admin' ? 'Reset Admin 6-Digit PIN' : 'Reset Partner 6-Digit PIN') : 
                  authView === 'signup' ? 'Create Account' : 
                  authRole === 'admin' ? 'Admin Portal' : 'Partner Portal'}
               </h2>
@@ -2171,7 +2225,7 @@ export default function App() {
                 <div>
                   <p className="text-[11px] font-bold text-amber-900 leading-tight">Admin Authorization Required</p>
                   <p className="text-[10px] text-amber-700 leading-tight mt-0.5">
-                    This portal is strictly restricted to <span className="font-bold underline">anoopjoy1988@gmail.com</span>.
+                    This portal is strictly restricted to <span className="font-bold underline">anoopjoy1988@gmail.com</span>. Sign in with your username/email and 6-digit PIN.
                   </p>
                 </div>
               </div>
@@ -2179,126 +2233,103 @@ export default function App() {
 
             {authView === 'login' && authRole === 'partner' && (
               <p className="text-xs text-gray-500 mb-1 leading-relaxed">
-                Log in instantly with your device's account, or enter any email to receive a confirmation link.
+                Sign in with your short username and 6-digit PIN, or tap your fingerprint below.
               </p>
             )}
 
             {authView === 'login' ? (
               <div className="space-y-3">
-                {/* 1-Tap Device Account Login */}
-                <button 
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  disabled={isProcessing}
-                  className="w-full py-3.5 bg-white border border-gray-200 text-gray-800 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-[0_4px_12px_rgba(0,0,0,0.06)] hover:bg-gray-50 active:scale-95 transition-all text-sm group"
-                >
-                  <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
-                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.15C3.26 21.36 7.33 24 12 24z"/>
-                    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.24C.45 8.16 0 9.94 0 12s.45 3.84 1.24 5.42l4.04-3.15z"/>
-                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.24 6.58l4.04 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
-                  </svg>
-                  <span>
-                    {authRole === 'admin' 
-                      ? 'Continue with Google (anoopjoy1988@gmail.com)' 
-                      : 'Continue with Device Account'}
-                  </span>
-                </button>
-
-                <div className="flex items-center gap-3 my-2">
-                  <div className="h-[1px] bg-gray-200 flex-1"></div>
-                  <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">or email confirmation</span>
-                  <div className="h-[1px] bg-gray-200 flex-1"></div>
-                </div>
-
-                {authMethod === 'magic' ? (
-                  <div className="space-y-3">
-                    <div className="space-y-0.5">
-                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">
-                        {authRole === 'admin' ? 'Admin Email' : 'Email Address'}
-                      </label>
-                      <input 
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder={authRole === 'admin' ? "anoopjoy1988@gmail.com" : "name@example.com"}
-                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
-                      />
-                    </div>
-
-                    <button 
-                      type="button"
-                      onClick={handleSendMagicLink}
-                      disabled={isProcessing}
-                      className="w-full py-3 bg-coffee-dark text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(61,43,31,0.15)] active:scale-95 disabled:opacity-50 transition-all text-sm"
-                    >
-                      {isProcessing ? (
-                        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full" />
-                      ) : (
-                        <>
-                          <Mail size={18} />
-                          Send Confirmation Link
-                        </>
-                      )}
-                    </button>
-
-                    {magicLinkSent && (
-                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2">
-                        <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" />
-                        <p className="text-[11px] text-emerald-800 leading-tight">
-                          Confirmation link sent to <strong>{email}</strong>! Check your inbox (or spam) and click the link to sign in.
-                        </p>
+                <div className="space-y-0.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest flex items-center gap-1">
+                      <User size={12} />
+                      {authRole === 'admin' ? 'Admin Email / Username' : 'Username or Email'}
+                    </label>
+                    {authRole === 'admin' && (
+                      <div className="flex items-center gap-1.5 text-[10px] font-bold">
+                        {username ? (
+                          <button
+                            type="button"
+                            onClick={() => setUsername('')}
+                            className="text-gray-400 hover:text-red-500 transition-colors"
+                          >
+                            Clear field
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setUsername('anoopjoy1988@gmail.com')}
+                            className="text-coffee-accent hover:underline transition-all"
+                          >
+                            Use anoopjoy1988@gmail.com
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="space-y-0.5">
-                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Email Address</label>
-                      <input 
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder={authRole === 'admin' ? "anoopjoy1988@gmail.com" : "name@example.com"}
-                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
-                      />
-                    </div>
+                  <div className="relative">
+                    <input 
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder={authRole === 'admin' ? "anoopjoy1988@gmail.com" : "Your username or email"}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      autoComplete="off"
+                      className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-9"
+                    />
+                    {username && (
+                      <button 
+                        type="button"
+                        onClick={() => setUsername('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors p-1"
+                        title="Clear field"
+                      >
+                        <X size={15} />
+                      </button>
+                    )}
+                  </div>
+                </div>
 
-                    <div className="space-y-0.5">
-                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Password</label>
-                      <div className="relative">
-                        <input 
-                          type={showPassword ? "text" : "password"}
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="••••••••"
-                          className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
-                        />
-                        <button 
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                        >
-                          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                        </button>
-                      </div>
-                    </div>
-
+                <div className="space-y-0.5">
+                  <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest flex items-center gap-1">
+                    <KeyRound size={12} />
+                    6-Digit PIN Code
+                  </label>
+                  <div className="relative">
+                    <input 
+                      type={showPin ? "text" : "password"}
+                      inputMode="numeric"
+                      maxLength={6}
+                      pattern="[0-9]*"
+                      value={pin}
+                      onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="••••••"
+                      className="w-full px-4 py-2.5 text-center tracking-[0.6em] font-mono font-bold text-base bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
+                    />
                     <button 
-                      onClick={handleAuth}
-                      disabled={isProcessing}
-                      className="w-full py-3 bg-coffee-dark text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(61,43,31,0.15)] active:scale-95 disabled:opacity-50 transition-all text-sm"
+                      type="button"
+                      onClick={() => setShowPin(!showPin)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
                     >
-                      {isProcessing ? (
-                        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full" />
-                      ) : (
-                        <>
-                          <LogIn size={18} /> Sign In with Password
-                        </>
-                      )}
+                      {showPin ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
                   </div>
-                )}
+                </div>
+
+                <button 
+                  onClick={handleAuth}
+                  disabled={isProcessing}
+                  className="w-full py-3 bg-coffee-dark text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(61,43,31,0.15)] active:scale-95 disabled:opacity-50 transition-all text-sm"
+                >
+                  {isProcessing ? (
+                    <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: 'linear' }} className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full" />
+                  ) : (
+                    <>
+                      <LogIn size={18} /> Sign In
+                    </>
+                  )}
+                </button>
 
                 {biometricsEnabled && (
                   <button 
@@ -2312,20 +2343,12 @@ export default function App() {
                 )}
 
                 <div className="flex flex-col items-center gap-2 pt-1">
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setAuthMethod(authMethod === 'magic' ? 'password' : 'magic');
-                      setAppError(null);
-                    }}
-                    className="text-xs font-semibold text-gray-500 hover:text-coffee-dark underline-offset-4 active:scale-95 transition-all"
-                  >
-                    {authMethod === 'magic' ? 'Or sign in with password' : 'Use email confirmation link instead'}
-                  </button>
-
                   {authRole !== 'admin' && (
                     <button 
-                      onClick={() => setAuthView('signup')}
+                      onClick={() => {
+                        setAuthView('signup');
+                        setAppError(null);
+                      }}
                       className="text-xs font-bold text-coffee-accent hover:text-coffee-dark underline-offset-4 active:scale-95 transition-all"
                     >
                       New partner? Create an account
@@ -2333,71 +2356,134 @@ export default function App() {
                   )}
 
                   <button 
-                    onClick={() => setAuthView('forgot')}
+                    onClick={() => {
+                      setAuthView('forgot');
+                      setAppError(null);
+                      if (authRole === 'admin') {
+                        setEmail('anoopjoy1988@gmail.com');
+                      }
+                    }}
                     className="text-[10px] font-medium text-gray-400 hover:text-gray-600 active:scale-95 transition-all"
                   >
-                    Forgot password?
+                    {authRole === 'admin' ? 'Forgot Admin 6-digit PIN?' : 'Forgot 6-digit PIN?'}
                   </button>
                 </div>
               </div>
             ) : (
               <div className="space-y-3">
                 {authView === 'forgot' && (
-                  <div className="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2 mb-2">
-                    <AlertCircle size={16} className="text-blue-500 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-[10px] text-blue-700 leading-tight font-bold">Check your Spam/Junk folder!</p>
-                      <p className="text-[10px] text-blue-600 leading-tight">
-                        Password reset emails may be flagged. Check all folders.
-                      </p>
+                  <>
+                    <div className="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2 mb-2">
+                      <AlertCircle size={16} className="text-blue-500 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-[10px] text-blue-700 leading-tight font-bold">
+                          {authRole === 'admin' ? 'Admin 6-Digit PIN Recovery' : 'Partner 6-Digit PIN Recovery'}
+                        </p>
+                        <p className="text-[10px] text-blue-600 leading-tight">
+                          We will email you a secure link to set your new 6-digit PIN code.
+                        </p>
+                      </div>
                     </div>
-                  </div>
+
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">
+                        {authRole === 'admin' ? 'Admin Email Address' : 'Username or Email'}
+                      </label>
+                      <input 
+                        type={authRole === 'admin' ? "email" : "text"}
+                        value={authRole === 'admin' ? (email || 'anoopjoy1988@gmail.com') : (username || email)}
+                        onChange={(e) => {
+                          if (authRole === 'admin') {
+                            setEmail(e.target.value);
+                          } else {
+                            setUsername(e.target.value);
+                            setEmail(e.target.value);
+                          }
+                        }}
+                        placeholder={authRole === 'admin' ? "anoopjoy1988@gmail.com" : "Enter your username or email"}
+                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
+                      />
+                    </div>
+                  </>
                 )}
 
                 {authView === 'signup' && (
-                  <div className="space-y-0.5">
-                    <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Full Name</label>
-                    <input 
-                      type="text"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      placeholder="Enter your name"
-                      className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
-                    />
-                  </div>
-                )}
-
-                <div className="space-y-0.5">
-                  <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Email Address</label>
-                  <input 
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@example.com"
-                    className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
-                  />
-                </div>
-
-                {authView !== 'forgot' && (
-                  <div className="space-y-0.5">
-                    <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Password</label>
-                    <div className="relative">
+                  <>
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Full Name</label>
                       <input 
-                        type={showPassword ? "text" : "password"}
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
+                        type="text"
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder="Enter your name"
+                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
                       />
-                      <button 
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                      >
-                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                      </button>
                     </div>
-                  </div>
+
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Short Username</label>
+                      <input 
+                        type="text"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                        placeholder="e.g. anoop88"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all font-mono"
+                      />
+                      <p className="text-[9px] text-gray-400 ml-1">Use this short name to log in quickly without re-typing email.</p>
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">
+                        {authRole === 'admin' ? 'Admin Email (strictly restricted)' : 'Email Address'}
+                      </label>
+                      <input 
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder={authRole === 'admin' ? "anoopjoy1988@gmail.com" : "name@example.com"}
+                        className="w-full px-4 py-2.5 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">6-Digit PIN Code</label>
+                      <div className="relative">
+                        <input 
+                          type={showPin ? "text" : "password"}
+                          inputMode="numeric"
+                          maxLength={6}
+                          pattern="[0-9]*"
+                          value={pin}
+                          onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                          placeholder="••••••"
+                          className="w-full px-4 py-2.5 text-center tracking-[0.6em] font-mono font-bold text-base bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
+                        />
+                        <button 
+                          type="button"
+                          onClick={() => setShowPin(!showPin)}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                          {showPin ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Confirm 6-Digit PIN</label>
+                      <input 
+                        type={showPin ? "text" : "password"}
+                        inputMode="numeric"
+                        maxLength={6}
+                        pattern="[0-9]*"
+                        value={confirmPin}
+                        onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="••••••"
+                        className="w-full px-4 py-2.5 text-center tracking-[0.6em] font-mono font-bold text-base bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all"
+                      />
+                    </div>
+                  </>
                 )}
 
                 <button 
@@ -2410,14 +2496,17 @@ export default function App() {
                   ) : (
                     <>
                       <LogIn size={18} />
-                      {authView === 'signup' ? 'Create Account' : 'Send Reset Link'}
+                      {authView === 'signup' ? 'Create Account' : 'Send 6-Digit PIN Reset Link'}
                     </>
                   )}
                 </button>
 
                 <div className="flex flex-col items-center gap-2 pt-1">
                   <button 
-                    onClick={() => setAuthView('login')}
+                    onClick={() => {
+                      setAuthView('login');
+                      setAppError(null);
+                    }}
                     className="text-xs font-bold text-coffee-accent hover:text-coffee-dark underline-offset-4 active:scale-95 transition-all"
                   >
                     Back to login
@@ -2562,45 +2651,7 @@ export default function App() {
           </motion.div>
         )}
 
-        {showResetConfirm && (
-          <div className="fixed inset-0 z-[110] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white w-full max-w-xs rounded-[2.5rem] p-8 text-center space-y-6">
-              <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto">
-                <Trash2 size={28} />
-              </div>
-              <div className="space-y-2">
-                <h3 className="text-lg font-bold text-gray-900">Reset Database?</h3>
-                <p className="text-xs text-gray-500 leading-relaxed">
-                  This will delete all cafés, stamp programs, and digital passes from the database permanently for a brand-new start. 
-                </p>
-              </div>
 
-              <div className="space-y-2 pt-1">
-                <button 
-                  onClick={wipeAllData}
-                  disabled={isPreWiping}
-                  className="w-full py-3.5 bg-amber-600 hover:bg-amber-700 text-white rounded-2xl font-bold shadow-lg shadow-amber-200 active:scale-95 transition-all text-sm flex items-center justify-center gap-2"
-                >
-                  {isPreWiping ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/35 border-t-white rounded-full animate-spin" />
-                      <span>Wiping Database...</span>
-                    </>
-                  ) : (
-                    "Yes, Delete & Wipe Clean"
-                  )}
-                </button>
-                <button 
-                  onClick={() => setShowResetConfirm(false)}
-                  disabled={isPreWiping}
-                  className="w-full py-3.5 bg-gray-50 text-gray-500 rounded-2xl font-bold text-sm active:scale-95 transition-all hover:bg-gray-100"
-                >
-                  Cancel
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
 
         {showDeleteConfirm && (
           <div className="fixed inset-0 z-[110] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
@@ -3108,8 +3159,8 @@ export default function App() {
                 </div>
               )}
             </div>
-            {myBiz && (
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              {myBiz && (
                 <button 
                   onClick={() => {
                     const hasId = !!myBiz.displayId;
@@ -3129,15 +3180,15 @@ export default function App() {
                 >
                   <Settings size={20} />
                 </button>
-                <button 
-                  onClick={() => setShowSignOutConfirm(true)}
-                  className="p-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
-                  title="Sign Out"
-                >
-                  <Power size={20} />
-                </button>
-              </div>
-            )}
+              )}
+              <button 
+                onClick={() => setShowSignOutConfirm(true)}
+                className="p-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
+                title="Sign Out"
+              >
+                <Power size={20} />
+              </button>
+            </div>
           </div>
 
           {!myBiz ? (
@@ -4544,14 +4595,6 @@ export default function App() {
               >
                 <ShieldCheck size={18} /> Privacy Policy
               </button>
-              {(profile?.role === 'admin' || profile?.email?.toLowerCase() === 'anoopjoy1988@gmail.com') && (
-                <button 
-                  onClick={() => setShowResetConfirm(true)} 
-                  className="w-full py-3 bg-amber-50 text-amber-700 border border-amber-100 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm hover:bg-amber-100/50"
-                >
-                  <Trash2 size={18} /> Reset Database (Wipe All)
-                </button>
-              )}
               <button 
                 onClick={() => setShowSignOutConfirm(true)} 
                 className="w-full py-3 bg-gray-100 text-gray-700 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm hover:bg-gray-200"
@@ -4662,7 +4705,7 @@ export default function App() {
               <div className="space-y-2">
                 <h3 className="text-xl font-bold text-gray-900">Enable Fingerprint Login?</h3>
                 <p className="text-sm text-gray-500 leading-relaxed">
-                  Would you like to enable quick fingerprint login for next time? This allows you to skip typing your password and sign in instantly.
+                  Would you like to enable quick fingerprint login for next time? This allows you to skip typing your 6-digit PIN and sign in instantly.
                 </p>
               </div>
               <div className="flex flex-col gap-3">
@@ -4710,44 +4753,51 @@ export default function App() {
               className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl space-y-6 text-left"
             >
               <div className="flex items-center justify-between border-b border-gray-100 pb-4">
-                <h3 className="text-lg font-bold text-gray-900">Verify Password</h3>
+                <h3 className="text-lg font-bold text-gray-900">Verify 6-Digit PIN</h3>
                 <button onClick={() => setShowBiometricSetupModal(false)} className="p-1.5 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors"><X size={16} /></button>
               </div>
               
               <p className="text-xs text-gray-500 leading-relaxed">
-                To securely store your login credentials in your device's biometric vault, please confirm your current password:
+                To securely store your credentials in your device's biometric vault, please confirm your 6-digit PIN:
               </p>
 
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest">Password</label>
+                <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest flex items-center gap-1">
+                  <KeyRound size={12} />
+                  6-Digit PIN
+                </label>
                 <div className="relative">
                   <input 
-                    type={showPassword ? "text" : "password"}
+                    type={showPin ? "text" : "password"}
+                    inputMode="numeric"
+                    maxLength={6}
+                    pattern="[0-9]*"
                     value={biometricPassword}
-                    onChange={(e) => setBiometricPassword(e.target.value)}
-                    placeholder="Enter your password"
-                    className="w-full px-4 py-3 text-sm bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
+                    onChange={(e) => setBiometricPassword(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="••••••"
+                    className="w-full px-4 py-3 text-center tracking-[0.6em] font-mono font-bold text-base bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
                   />
                   <button 
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
+                    onClick={() => setShowPin(!showPin)}
                     className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
                   >
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    {showPin ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
               </div>
 
               <button 
                 onClick={async () => {
-                  if (!biometricPassword) return;
+                  if (!biometricPassword || biometricPassword.length !== 6) return;
                   setIsProcessing(true);
                   try {
                     const emailVal = user?.email || profile?.email || '';
                     if (!emailVal) throw new Error("No user email found.");
                     
-                    await signInWithEmailAndPassword(auth, emailVal, biometricPassword);
-                    await enableBiometrics(emailVal, biometricPassword);
+                    const secret = pinToSecret(biometricPassword);
+                    await signInWithEmailAndPassword(auth, emailVal, secret);
+                    await enableBiometrics(emailVal, secret);
                     setBiometricsEnabled(true);
                     setShowBiometricSetupModal(false);
                     setBiometricPassword('');
@@ -4755,9 +4805,9 @@ export default function App() {
                     setSaveSuccess("Fingerprint login enabled successfully!");
                     setTimeout(() => setSaveSuccess(null), 3000);
                   } catch (err: any) {
-                    let msg = err.message || "Failed to verify password.";
+                    let msg = err.message || "Failed to verify 6-digit PIN.";
                     if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-                      msg = "Incorrect password. Please try again.";
+                      msg = "Incorrect 6-digit PIN. Please try again.";
                     }
                     setAppError(msg);
                     setTimeout(() => setAppError(null), 4000);
@@ -4765,7 +4815,7 @@ export default function App() {
                     setIsProcessing(false);
                   }
                 }}
-                disabled={isProcessing || !biometricPassword}
+                disabled={isProcessing || biometricPassword.length !== 6}
                 className="w-full py-3.5 bg-coffee-dark hover:bg-opacity-95 text-white rounded-2xl font-bold shadow-lg active:scale-95 disabled:opacity-50 transition-all text-sm flex items-center justify-center gap-2"
               >
                 {isProcessing ? (
@@ -5066,14 +5116,24 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowSignOutConfirm(false)}
+            className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm cursor-pointer"
           >
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl space-y-6 text-center"
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl space-y-6 text-center relative cursor-default"
             >
+              <button 
+                onClick={() => setShowSignOutConfirm(false)} 
+                className="absolute right-5 top-5 p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors"
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+
               <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto text-red-600">
                 <Power size={40} />
               </div>

@@ -11,8 +11,7 @@ service cloud.firestore {
     function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function isAdminEmail() { 
       return isSignedIn() && 
-             request.auth.token.email.lower() == "anoopjoy1988@gmail.com" &&
-             request.auth.token.email_verified == true;
+             request.auth.token.email.lower() == "anoopjoy1988@gmail.com";
     }
     
     // Auth Role Helpers
@@ -103,6 +102,13 @@ service cloud.firestore {
     }
 
     // --- Collection Rules ---
+
+    match /usernames/{username} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isOwner(resource.data.uid) || isAdmin();
+    }
 
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
