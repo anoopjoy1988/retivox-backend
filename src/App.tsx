@@ -289,6 +289,8 @@ export default function App() {
   const [allCards, setAllCards] = useState<LoyaltyCard[]>([]);
 
   const [selectedAdminBizId, setSelectedAdminBizId] = useState<string | null>(null);
+  const [cafeToDelete, setCafeToDelete] = useState<Business | null>(null);
+  const [isDeletingCafe, setIsDeletingCafe] = useState(false);
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -1608,6 +1610,33 @@ export default function App() {
     }
   };
 
+  const deleteBusinessById = async (biz: Business) => {
+    setIsDeletingCafe(true);
+    try {
+      const progSnap = await getDocs(query(collection(db, 'programs'), where('businessId', '==', biz.id)));
+      for (const p of progSnap.docs) {
+        await deleteDoc(p.ref);
+      }
+      const cardSnap = await getDocs(query(collection(db, 'loyaltyCards'), where('businessId', '==', biz.id)));
+      for (const c of cardSnap.docs) {
+        await deleteDoc(c.ref);
+      }
+      await deleteDoc(doc(db, 'businesses', biz.id));
+
+      if (selectedAdminBizId === biz.id) {
+        setSelectedAdminBizId(null);
+      }
+      setCafeToDelete(null);
+      setSaveSuccess(`Cafe "${biz.name} ${biz.displayId}" deleted successfully.`);
+      setTimeout(() => setSaveSuccess(null), 4000);
+    } catch (err: any) {
+      console.error("Failed to delete business:", err);
+      handleFirestoreError(err, OperationType.DELETE, `businesses/${biz.id}`);
+    } finally {
+      setIsDeletingCafe(false);
+    }
+  };
+
   const handleSignOut = async () => {
     try {
       setIsSplashing(true);
@@ -2639,26 +2668,51 @@ export default function App() {
                 <div className="space-y-2">
                   <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 ml-2">Registered Cafes</p>
                   {businesses.map(biz => (
-                    <button
+                    <div
                       key={biz.id}
-                      onClick={() => setSelectedAdminBizId(biz.id)}
-                      className="w-full bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between group active:scale-[0.98] transition-all"
+                      className="w-full bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between group transition-all"
                     >
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-9 h-9 bg-gray-50 rounded-xl flex items-center justify-center overflow-hidden border border-gray-100 group-hover:border-coffee-light transition-colors">
+                      <button
+                        onClick={() => setSelectedAdminBizId(biz.id)}
+                        className="flex items-center gap-2.5 flex-1 min-w-0 text-left active:scale-[0.98] transition-transform"
+                      >
+                        <div className="w-9 h-9 bg-gray-50 rounded-xl flex items-center justify-center overflow-hidden border border-gray-100 group-hover:border-coffee-light transition-colors shrink-0">
                           {biz.logoUrl ? (
                             <img src={biz.logoUrl} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                           ) : (
                             <Store className="text-gray-300" size={18} />
                           )}
                         </div>
-                        <div className="text-left">
-                          <h3 className="font-bold text-sm text-gray-900 group-hover:text-coffee-dark transition-colors">{biz.name}</h3>
-                          <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{biz.displayId || 'No ID'}</p>
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-bold text-sm text-gray-900 group-hover:text-coffee-dark transition-colors truncate">{biz.name}</h3>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{biz.displayId || 'No ID'}</span>
+                            <span className="text-[8px] px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded font-mono truncate max-w-[140px]">
+                              {biz.ownerId === user.uid ? 'Owner: You' : `Owner: ${biz.ownerId?.slice(0, 6)}...`}
+                            </span>
+                          </div>
                         </div>
+                      </button>
+
+                      <div className="flex items-center gap-1 shrink-0 ml-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCafeToDelete(biz);
+                          }}
+                          className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
+                          title="Delete Cafe"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                        <button
+                          onClick={() => setSelectedAdminBizId(biz.id)}
+                          className="p-1 text-gray-300 group-hover:text-coffee-accent transition-colors"
+                        >
+                          <ChevronRight size={18} />
+                        </button>
                       </div>
-                      <ChevronRight className="text-gray-300 group-hover:text-coffee-accent transition-colors" size={18} />
-                    </button>
+                    </div>
                   ))}
                 </div>
               ) : (
@@ -2686,25 +2740,37 @@ export default function App() {
                     return (
                       <div className="bg-white p-4 rounded-[1.8rem] border border-gray-100 shadow-sm space-y-4">
                         {/* Header Info */}
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center overflow-hidden border border-gray-100 shadow-inner">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-12 h-12 bg-gray-50 rounded-xl flex items-center justify-center overflow-hidden border border-gray-100 shadow-inner shrink-0">
                               {biz.logoUrl ? (
                                 <img src={biz.logoUrl} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                               ) : (
                                 <Store className="text-gray-300" size={18} />
                               )}
                             </div>
-                            <div>
-                              <h3 className="font-black text-lg leading-tight text-gray-900">{biz.name}</h3>
-                              <div className="flex items-center gap-2 mt-0.5">
+                            <div className="min-w-0">
+                              <h3 className="font-black text-lg leading-tight text-gray-900 truncate">{biz.name}</h3>
+                              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                 <span className="px-1.5 py-0.5 bg-gray-900 text-white rounded text-[7px] font-black uppercase tracking-tighter">
                                   {biz.type}
                                 </span>
-                                <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{biz.displayId || 'No ID'}</p>
+                                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{biz.displayId || 'No ID'}</span>
+                                <span className="text-[8px] text-gray-400 font-mono">
+                                  Owner: {biz.ownerId === user.uid ? 'You (anoopjoy1988@gmail.com)' : biz.ownerId}
+                                </span>
                               </div>
                             </div>
                           </div>
+
+                          <button
+                            onClick={() => setCafeToDelete(biz)}
+                            className="px-3 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-bold shrink-0"
+                            title="Delete this cafe"
+                          >
+                            <Trash2 size={15} />
+                            <span>Delete</span>
+                          </button>
                         </div>
 
                         {/* Business Details & Active Metrics (Side by Side Grid) */}
@@ -4713,6 +4779,64 @@ export default function App() {
                 <button 
                   onClick={() => setShowWebBiometricModal(false)}
                   className="w-full py-3 bg-gray-100 text-gray-500 rounded-xl font-bold active:scale-95 transition-all text-xs"
+                >
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Cafe Confirmation Modal */}
+      <AnimatePresence>
+        {cafeToDelete && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }} 
+              animate={{ scale: 1, opacity: 1 }} 
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl space-y-6 text-center"
+            >
+              <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto">
+                <Trash2 size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold text-gray-900">Delete Cafe?</h3>
+                <p className="text-sm text-gray-500">
+                  Are you sure you want to delete <strong className="text-gray-800">{cafeToDelete.name} ({cafeToDelete.displayId})</strong>? This action cannot be undone.
+                </p>
+                <div className="mt-3 p-3 bg-gray-50 rounded-xl text-left border border-gray-100 text-[11px] space-y-1">
+                  <div>
+                    <span className="text-gray-400 font-bold uppercase text-[9px] block">DOCUMENT ID</span>
+                    <span className="font-mono text-gray-700 break-all">{cafeToDelete.id}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400 font-bold uppercase text-[9px] block">OWNER ID</span>
+                    <span className="font-mono text-gray-700 break-all">
+                      {cafeToDelete.ownerId === user?.uid ? `${cafeToDelete.ownerId} (Your Account)` : cafeToDelete.ownerId}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={() => deleteBusinessById(cafeToDelete)}
+                  disabled={isDeletingCafe}
+                  className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-bold shadow-lg shadow-red-200 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <Trash2 size={18} />
+                  {isDeletingCafe ? 'Deleting...' : 'Yes, Delete Cafe'}
+                </button>
+                <button 
+                  onClick={() => setCafeToDelete(null)}
+                  disabled={isDeletingCafe}
+                  className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold active:scale-95 transition-all"
                 >
                   Cancel
                 </button>
