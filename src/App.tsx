@@ -11,7 +11,7 @@ import {
   ChevronRight, Star, Clock, MapPin, CheckCircle2, AlertCircle, AlertTriangle, Flag,
   LayoutDashboard, Users, Store, PlusCircle, BarChart3, ShieldCheck, ShieldAlert,
   Smartphone, Scan, X, Edit2, Trash2, Mail, Trophy, Power, ExternalLink,
-  Eye, EyeOff, Fingerprint
+  Eye, EyeOff, Fingerprint, Download, Sparkles, RefreshCw
 } from 'lucide-react';
 import { 
   isBiometricsAvailable, 
@@ -45,6 +45,31 @@ import { Html5Qrcode } from 'html5-qrcode';
 // --- Types ---
 type Tab = 'explore' | 'wallet' | 'profile' | 'partner' | 'admin_home';
 type UserRole = 'customer' | 'partner' | 'admin';
+
+interface AppUpdateInfo {
+  hasUpdate: boolean;
+  latestVersion: string;
+  releaseName: string;
+  releaseNotes: string;
+  downloadUrl: string;
+  apkName?: string;
+  apkSize?: number;
+  publishedAt?: string;
+}
+
+function isNewerVersion(latest: string, current: string): boolean {
+  if (!latest || !current) return false;
+  const clean = (v: string) => v.replace(/^v/i, '').trim();
+  const pLatest = clean(latest).split('.').map(n => parseInt(n, 10) || 0);
+  const pCurrent = clean(current).split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pLatest.length, pCurrent.length); i++) {
+    const l = pLatest[i] || 0;
+    const c = pCurrent[i] || 0;
+    if (l > c) return true;
+    if (l < c) return false;
+  }
+  return false;
+}
 
 interface Business {
   id: string;
@@ -291,6 +316,9 @@ export default function App() {
   const [selectedAdminBizId, setSelectedAdminBizId] = useState<string | null>(null);
   const [cafeToDelete, setCafeToDelete] = useState<Business | null>(null);
   const [isDeletingCafe, setIsDeletingCafe] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.1');
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -467,6 +495,9 @@ export default function App() {
       try {
         stateListener = await CapApp.addListener('appStateChange', ({ isActive }) => {
           console.log('App state changed. Is active?', isActive);
+          if (isActive) {
+            checkForAppUpdates(false);
+          }
         });
 
         backListener = await CapApp.addListener('backButton', async () => {
@@ -541,6 +572,92 @@ export default function App() {
       if (stateListener) stateListener.remove();
       if (backListener) backListener.remove();
     };
+  }, []);
+
+  // --- Background In-App Update Checker ---
+  const checkForAppUpdates = async (isManual = false) => {
+    try {
+      if (isManual) setIsCheckingUpdate(true);
+
+      let currentVer = '1.0.1';
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const info = await CapApp.getInfo();
+          if (info?.version) {
+            currentVer = info.version;
+            setInstalledAppVersion(info.version);
+          }
+        } catch (e) {
+          console.warn("Could not read native app version:", e);
+        }
+      }
+
+      let updateData: AppUpdateInfo | null = null;
+
+      // 1. Check via RetivoX backend proxy
+      try {
+        const res = await fetch(getApiUrl(`/api/app/check-update?currentVersion=${encodeURIComponent(currentVer)}`));
+        if (res.ok) {
+          updateData = await res.json();
+        }
+      } catch (backendErr) {
+        console.warn("Backend update check failed, attempting public GitHub API fallback:", backendErr);
+      }
+
+      // 2. Direct GitHub Fallback if backend wasn't reachable
+      if (!updateData) {
+        try {
+          const ghRes = await fetch('https://api.github.com/repos/anoopjoy1988/retivox-backend/releases/latest', {
+            headers: { 'Accept': 'application/vnd.github.v3+json' }
+          });
+          if (ghRes.ok) {
+            const release = await ghRes.json();
+            const latestTag = release.tag_name || release.name || '';
+            const apkAsset = (release.assets || []).find((a: any) => a.name && a.name.endsWith('.apk'));
+            const hasUpdate = isNewerVersion(latestTag, currentVer);
+            updateData = {
+              hasUpdate,
+              latestVersion: latestTag.replace(/^v/i, ''),
+              releaseName: release.name || latestTag,
+              releaseNotes: release.body || "A new update for RetivoX is available with improvements and fixes.",
+              downloadUrl: apkAsset ? apkAsset.browser_download_url : (release.html_url || 'https://github.com/anoopjoy1988/retivox-backend/releases/latest'),
+              apkName: apkAsset ? apkAsset.name : undefined,
+              apkSize: apkAsset ? apkAsset.size : undefined,
+              publishedAt: release.published_at
+            };
+          }
+        } catch (ghErr) {
+          console.warn("GitHub public update check error:", ghErr);
+        }
+      }
+
+      if (updateData && updateData.hasUpdate) {
+        // Prevent recurring popups in the same browser/app session if user dismissed it
+        const dismissed = sessionStorage.getItem(`dismissed_update_${updateData.latestVersion}`);
+        if (isManual || !dismissed) {
+          setAvailableUpdate(updateData);
+        }
+      } else if (isManual) {
+        setSaveSuccess(`You are up to date! RetivoX v${currentVer} is the latest version.`);
+        setTimeout(() => setSaveSuccess(null), 3500);
+      }
+    } catch (err: any) {
+      console.error("Update check failed:", err);
+      if (isManual) {
+        setAppError("Unable to check for updates right now. Please try again later.");
+        setTimeout(() => setAppError(null), 4000);
+      }
+    } finally {
+      if (isManual) setIsCheckingUpdate(false);
+    }
+  };
+
+  useEffect(() => {
+    // Run quiet background update check on app launch
+    const timer = setTimeout(() => {
+      checkForAppUpdates(false);
+    }, 2000);
+    return () => clearTimeout(timer);
   }, []);
 
   // --- Helper: Notify Admins ---
@@ -2891,6 +3008,28 @@ export default function App() {
                 >
                   <ShieldCheck size={18} /> Privacy Policy
                 </button>
+
+                {/* App Version & In-App Update Checker */}
+                <div className="w-full bg-white rounded-2xl p-3.5 border border-gray-100 flex items-center justify-between shadow-sm text-left">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-coffee-cream flex items-center justify-center text-coffee-dark shrink-0">
+                      <Sparkles size={16} />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-gray-900">App Version</p>
+                      <p className="text-[10px] text-gray-400 font-mono">v{installedAppVersion}</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => checkForAppUpdates(true)} 
+                    disabled={isCheckingUpdate}
+                    className="px-3 py-1.5 bg-coffee-dark text-white rounded-xl text-xs font-bold active:scale-95 transition-transform flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={isCheckingUpdate ? "animate-spin" : ""} />
+                    {isCheckingUpdate ? "Checking..." : "Check for Updates"}
+                  </button>
+                </div>
+
                 <button 
                   onClick={() => setShowSignOutConfirm(true)}
                   className="w-full py-3 bg-gray-100 text-gray-700 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm"
@@ -4839,6 +4978,80 @@ export default function App() {
                   className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-bold active:scale-95 transition-all"
                 >
                   Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Background In-App Update Modal */}
+      <AnimatePresence>
+        {availableUpdate && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[210] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }} 
+              animate={{ scale: 1, opacity: 1, y: 0 }} 
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white w-full max-w-sm rounded-[2.5rem] p-7 shadow-2xl space-y-5 text-center border border-gray-100 overflow-hidden"
+            >
+              <div className="relative">
+                <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner border border-amber-100/60">
+                  <Download size={30} className="animate-bounce" />
+                </div>
+                <div className="absolute top-0 right-1/4">
+                  <Sparkles size={16} className="text-amber-400 animate-pulse" />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-amber-100 text-amber-800 rounded-full text-[10px] font-black uppercase tracking-wider mb-1">
+                  Update Ready
+                </div>
+                <h3 className="text-xl font-black text-gray-900 leading-tight">New Version Available!</h3>
+                <p className="text-xs text-gray-500">
+                  Version <strong className="text-gray-800">v{availableUpdate.latestVersion}</strong> is ready to download.
+                  <span className="block text-[10px] text-gray-400 mt-0.5 font-mono">Current: v{installedAppVersion}</span>
+                </p>
+              </div>
+
+              {availableUpdate.releaseNotes && (
+                <div className="bg-gray-50 p-3.5 rounded-2xl text-left border border-gray-100 text-xs space-y-1 max-h-32 overflow-y-auto">
+                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">What's New</p>
+                  <p className="text-gray-600 text-xs leading-relaxed whitespace-pre-line font-medium">
+                    {availableUpdate.releaseNotes}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-2.5 pt-1">
+                <button 
+                  onClick={async () => {
+                    const url = availableUpdate.downloadUrl;
+                    if (Capacitor.isNativePlatform()) {
+                      await Browser.open({ url }).catch(() => window.open(url, '_blank'));
+                    } else {
+                      window.open(url, '_blank');
+                    }
+                  }}
+                  className="w-full py-4 bg-coffee-dark text-white rounded-2xl font-bold shadow-lg shadow-coffee-dark/20 active:scale-95 transition-all flex items-center justify-center gap-2 text-sm"
+                >
+                  <Download size={18} />
+                  Download & Install Update
+                </button>
+                <button 
+                  onClick={() => {
+                    sessionStorage.setItem(`dismissed_update_${availableUpdate.latestVersion}`, 'true');
+                    setAvailableUpdate(null);
+                  }}
+                  className="w-full py-3 bg-gray-100 text-gray-600 rounded-2xl font-bold active:scale-95 transition-all text-xs"
+                >
+                  Remind Me Later
                 </button>
               </div>
             </motion.div>

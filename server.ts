@@ -44,6 +44,20 @@ function signGoogleWalletJwt(payload: any, privateKey: string, clientEmail: stri
   return `${headerStr}.${payloadStr}.${signature}`;
 }
 
+function isNewerVersion(latest: string, current: string): boolean {
+  if (!latest || !current) return false;
+  const clean = (v: string) => v.replace(/^v/i, '').trim();
+  const pLatest = clean(latest).split('.').map(n => parseInt(n, 10) || 0);
+  const pCurrent = clean(current).split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pLatest.length, pCurrent.length); i++) {
+    const l = pLatest[i] || 0;
+    const c = pCurrent[i] || 0;
+    if (l > c) return true;
+    if (l < c) return false;
+  }
+  return false;
+}
+
 // Lazy Initialize Firebase Admin
 let adminDb: admin.firestore.Firestore | null = null;
 let cachedConfig: any = null;
@@ -568,6 +582,70 @@ async function startServer() {
     res.status(200).json({
       message: `Notifications sent! (FCM Native: ${fcmSuccessCount}, Web Push: ${webSuccessCount})`
     });
+  });
+
+  // API Route to check for App Updates via GitHub Releases
+  app.get("/api/app/check-update", async (req: express.Request, res: express.Response) => {
+    try {
+      const clientVersion = (req.query.currentVersion as string) || "1.0.0";
+      const repo = "anoopjoy1988/retivox-backend";
+      const githubToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+
+      const headers: Record<string, string> = {
+        "User-Agent": "RetivoX-App-Updater",
+        "Accept": "application/vnd.github.v3+json"
+      };
+      if (githubToken) {
+        headers["Authorization"] = `token ${githubToken}`;
+      }
+
+      let latestRelease: any = null;
+      try {
+        const ghRes = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers });
+        if (ghRes.ok) {
+          latestRelease = await ghRes.json();
+        }
+      } catch (ghFetchErr) {
+        console.warn("Direct GitHub release fetch error:", ghFetchErr);
+      }
+
+      if (latestRelease) {
+        const latestTag = latestRelease.tag_name || latestRelease.name || "";
+        const apkAsset = (latestRelease.assets || []).find((a: any) => a.name && a.name.endsWith('.apk'));
+        const hasUpdate = isNewerVersion(latestTag, clientVersion);
+
+        return res.status(200).json({
+          hasUpdate,
+          latestVersion: latestTag.replace(/^v/i, ''),
+          releaseName: latestRelease.name || latestTag,
+          releaseNotes: latestRelease.body || "A new update for RetivoX is available with improvements and fixes.",
+          downloadUrl: apkAsset ? apkAsset.browser_download_url : (latestRelease.html_url || `https://github.com/${repo}/releases/latest`),
+          apkName: apkAsset ? apkAsset.name : null,
+          apkSize: apkAsset ? apkAsset.size : null,
+          publishedAt: latestRelease.published_at
+        });
+      }
+
+      // Fallback: Read current version from package.json
+      let fallbackVersion = "1.0.1";
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+        if (pkg.version) fallbackVersion = pkg.version;
+      } catch (_) {}
+
+      const hasUpdate = isNewerVersion(fallbackVersion, clientVersion);
+      return res.status(200).json({
+        hasUpdate,
+        latestVersion: fallbackVersion,
+        releaseName: `RetivoX v${fallbackVersion}`,
+        releaseNotes: "Latest stable version with recent bug fixes and performance improvements.",
+        downloadUrl: `https://github.com/${repo}/releases/latest`,
+        publishedAt: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.error("Check update error:", err);
+      res.status(500).json({ error: "Failed to check for updates", details: err?.message });
+    }
   });
 
   // API Route to generate Wallet Passes
