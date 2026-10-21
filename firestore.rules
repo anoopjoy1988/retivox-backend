@@ -185,5 +185,10 @@ service cloud.firestore {
       allow create, update: if isOwner(userId) && isAdmin() && isValidAdminSubscription(request.resource.data);
       allow delete: if isOwner(userId) || isAdmin();
     }
+
+    match /app_updates/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
   }
 }

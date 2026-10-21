@@ -530,7 +530,7 @@ export default function App() {
     try {
       if (isManual) setIsCheckingUpdate(true);
 
-      let currentVer = '1.0.1';
+      let currentVer = installedAppVersion || '1.0.3';
       if (Capacitor.isNativePlatform()) {
         try {
           const info = await CapApp.getInfo();
@@ -544,46 +544,70 @@ export default function App() {
       }
 
       let updateData: AppUpdateInfo | null = null;
+      const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.retivox.loyalty';
 
-      // 1. Check via RetivoX backend proxy
+      // 1. Direct Cloud Firestore check (Highest reliability on mobile & web)
       try {
-        const res = await fetch(getApiUrl(`/api/app/check-update?currentVersion=${encodeURIComponent(currentVer)}`));
-        if (res.ok) {
-          updateData = await res.json();
+        const updateDoc = await getDoc(doc(db, 'app_updates', 'latest'));
+        if (updateDoc.exists()) {
+          const data = updateDoc.data();
+          const latestVer = data.latestVersion || '1.0.3';
+          const hasUpdate = isNewerVersion(latestVer, currentVer);
+          updateData = {
+            hasUpdate,
+            latestVersion: latestVer,
+            releaseName: data.releaseName || `RetivoX v${latestVer}`,
+            releaseNotes: data.releaseNotes || "A new update for RetivoX is available on Google Play Store with latest improvements and fixes.",
+            downloadUrl: data.downloadUrl || playStoreUrl,
+            publishedAt: data.updatedAt?.toDate ? data.updatedAt.toDate().toISOString() : new Date().toISOString()
+          };
         }
-      } catch (backendErr) {
-        console.warn("Backend update check failed, attempting public GitHub API fallback:", backendErr);
+      } catch (fsErr) {
+        console.warn("Firestore update check notice:", fsErr);
       }
 
-      // 2. Direct GitHub Fallback if backend wasn't reachable
+      // 2. Check via RetivoX backend proxy if not found in Firestore
       if (!updateData) {
         try {
-          const ghRes = await fetch('https://api.github.com/repos/anoopjoy1988/retivox-backend/releases/latest', {
-            headers: { 'Accept': 'application/vnd.github.v3+json' }
-          });
-          if (ghRes.ok) {
-            const release = await ghRes.json();
-            const latestTag = release.tag_name || release.name || '';
-            const apkAsset = (release.assets || []).find((a: any) => a.name && a.name.endsWith('.apk'));
-            const hasUpdate = isNewerVersion(latestTag, currentVer);
-            updateData = {
-              hasUpdate,
-              latestVersion: latestTag.replace(/^v/i, ''),
-              releaseName: release.name || latestTag,
-              releaseNotes: release.body || "A new update for RetivoX is available with improvements and fixes.",
-              downloadUrl: apkAsset ? apkAsset.browser_download_url : (release.html_url || 'https://github.com/anoopjoy1988/retivox-backend/releases/latest'),
-              apkName: apkAsset ? apkAsset.name : undefined,
-              apkSize: apkAsset ? apkAsset.size : undefined,
-              publishedAt: release.published_at
-            };
+          const res = await fetch(getApiUrl(`/api/app/check-update?currentVersion=${encodeURIComponent(currentVer)}`));
+          if (res.ok) {
+            updateData = await res.json();
           }
-        } catch (ghErr) {
-          console.warn("GitHub public update check error:", ghErr);
+        } catch (backendErr) {
+          // Quiet backend fallback
+        }
+      }
+
+      // 3. Fallback: target production release v1.0.3 with Google Play Store link
+      if (!updateData) {
+        const fallbackTarget = '1.0.3';
+        const hasUpdate = isNewerVersion(fallbackTarget, currentVer);
+        updateData = {
+          hasUpdate,
+          latestVersion: fallbackTarget,
+          releaseName: `RetivoX v${fallbackTarget}`,
+          releaseNotes: "A new update for RetivoX is available on Google Play Store with improvements and fixes.",
+          downloadUrl: playStoreUrl,
+          publishedAt: new Date().toISOString()
+        };
+      }
+
+      // If user is Admin, auto-sync app_updates/latest in Firestore so all devices see the latest broadcast
+      if (isAdminMode && (user?.email?.toLowerCase() === 'anoopjoy1988@gmail.com')) {
+        try {
+          await setDoc(doc(db, 'app_updates', 'latest'), {
+            latestVersion: '1.0.3',
+            releaseName: 'RetivoX v1.0.3',
+            releaseNotes: 'Performance improvements, clean Play Store production build, and enhanced security.',
+            downloadUrl: playStoreUrl,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        } catch (syncErr) {
+          console.warn("Could not sync latest update broadcast to Firestore:", syncErr);
         }
       }
 
       if (updateData && updateData.hasUpdate) {
-        // Prevent recurring popups in the same browser/app session if user dismissed it
         const dismissed = sessionStorage.getItem(`dismissed_update_${updateData.latestVersion}`);
         if (isManual || !dismissed) {
           setAvailableUpdate(updateData);
@@ -3176,6 +3200,14 @@ export default function App() {
                 </button>
               )}
               <button 
+                onClick={() => checkForAppUpdates(true)}
+                disabled={isCheckingUpdate}
+                className="p-2 bg-coffee-cream text-coffee-dark rounded-xl hover:bg-opacity-80 transition-colors disabled:opacity-50"
+                title={`App Version v${installedAppVersion} - Check for Updates`}
+              >
+                <RefreshCw size={20} className={isCheckingUpdate ? "animate-spin" : ""} />
+              </button>
+              <button 
                 onClick={() => setShowSignOutConfirm(true)}
                 className="p-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
                 title="Sign Out"
@@ -3665,6 +3697,29 @@ export default function App() {
                             <Trash2 size={18} /> Delete Personalization
                           </button>
                         )}
+
+                        {/* App Version & In-App Update Checker for Partner */}
+                        <div className="pt-2 border-t border-gray-100">
+                          <div className="bg-gray-50 rounded-2xl p-3.5 border border-gray-100 flex items-center justify-between shadow-sm text-left">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-xl bg-coffee-cream flex items-center justify-center text-coffee-dark shrink-0">
+                                <Sparkles size={16} />
+                              </div>
+                              <div>
+                                <p className="text-xs font-bold text-gray-900">App Version</p>
+                                <p className="text-[10px] text-gray-400 font-mono">v{installedAppVersion}</p>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => checkForAppUpdates(true)} 
+                              disabled={isCheckingUpdate}
+                              className="px-3 py-1.5 bg-coffee-dark text-white rounded-xl text-xs font-bold active:scale-95 transition-transform flex items-center gap-1.5 disabled:opacity-50"
+                            >
+                              <RefreshCw size={12} className={isCheckingUpdate ? "animate-spin" : ""} />
+                              {isCheckingUpdate ? "Checking..." : "Check for Updates"}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </motion.div>
                   </motion.div>
@@ -4459,6 +4514,28 @@ export default function App() {
               >
                 <ShieldCheck size={18} /> Privacy Policy
               </button>
+
+              {/* App Version & In-App Update Checker */}
+              <div className="w-full bg-white rounded-2xl p-3.5 border border-gray-100 flex items-center justify-between shadow-sm text-left">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-coffee-cream flex items-center justify-center text-coffee-dark shrink-0">
+                    <Sparkles size={16} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-gray-900">App Version</p>
+                    <p className="text-[10px] text-gray-400 font-mono">v{installedAppVersion}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => checkForAppUpdates(true)} 
+                  disabled={isCheckingUpdate}
+                  className="px-3 py-1.5 bg-coffee-dark text-white rounded-xl text-xs font-bold active:scale-95 transition-transform flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={isCheckingUpdate ? "animate-spin" : ""} />
+                  {isCheckingUpdate ? "Checking..." : "Check for Updates"}
+                </button>
+              </div>
+
               <button 
                 onClick={() => setShowSignOutConfirm(true)} 
                 className="w-full py-3 bg-gray-100 text-gray-700 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm hover:bg-gray-200"
@@ -4800,9 +4877,14 @@ export default function App() {
               <div className="flex flex-col gap-2.5 pt-1">
                 <button 
                   onClick={async () => {
-                    const url = availableUpdate.downloadUrl;
+                    const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.retivox.loyalty';
+                    const url = availableUpdate.downloadUrl || playStoreUrl;
                     if (Capacitor.isNativePlatform()) {
-                      await Browser.open({ url }).catch(() => window.open(url, '_blank'));
+                      try {
+                        await Browser.open({ url });
+                      } catch (err) {
+                        window.open(url, '_system');
+                      }
                     } else {
                       window.open(url, '_blank');
                     }
