@@ -254,9 +254,6 @@ export default function App() {
   const [showBiometricPromo, setShowBiometricPromo] = useState(false);
   const [showBiometricSetupModal, setShowBiometricSetupModal] = useState(false);
   const [biometricPassword, setBiometricPassword] = useState('');
-  const [showWebBiometricModal, setShowWebBiometricModal] = useState(false);
-  const [webBiometricSuccess, setWebBiometricSuccess] = useState<boolean | null>(null);
-  const [pendingCredentials, setPendingCredentials] = useState<{ email: string; pass: string } | null>(null);
   const [promoEmail, setPromoEmail] = useState('');
   const [promoPassword, setPromoPassword] = useState('');
 
@@ -318,7 +315,7 @@ export default function App() {
   const [isDeletingCafe, setIsDeletingCafe] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.2');
+  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.3');
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -1560,44 +1557,41 @@ export default function App() {
     setAppError(null);
     try {
       if (!Capacitor.isNativePlatform()) {
-        const creds = await getStoredCredentials();
-        setPendingCredentials(creds);
-        setShowWebBiometricModal(true);
-        setWebBiometricSuccess(null);
-      } else {
-        setIsProcessing(true);
-        const creds = await getStoredCredentials();
-        const cred = await signInWithEmailAndPassword(auth, creds.email, creds.pass);
-        
-        // Admin Auto-Upgrade
-        const adminEmails = ['anoopjoy1988@gmail.com'];
-        if (adminEmails.includes(cred.user.email?.toLowerCase() || '')) {
-          try {
-            await setDoc(doc(db, 'users', cred.user.uid), {
-              uid: cred.user.uid,
-              email: cred.user.email,
-              name: cred.user.displayName || cred.user.email?.split('@')[0] || 'Admin',
-              role: 'admin'
-            }, { merge: true });
-          } catch (syncErr) {
-            console.warn("Minor sync error:", syncErr);
-          }
-        }
-        
-        // Verify role
-        const uDoc = await getDoc(doc(db, 'users', cred.user.uid));
-        const userRole = uDoc.exists() ? uDoc.data().role : 'partner';
-        
-        if (userRole === 'admin') {
-          setIsAdminMode(true);
-          setActiveTab('admin_home');
-        } else {
-          setIsAdminMode(false);
-          setActiveTab('partner');
-        }
-        setHasSetInitialTab(true);
-        setIsProcessing(false);
+        setAppError("Biometric authentication is only available on mobile devices.");
+        return;
       }
+      setIsProcessing(true);
+      const creds = await getStoredCredentials();
+      const cred = await signInWithEmailAndPassword(auth, creds.email, creds.pass);
+      
+      // Admin Auto-Upgrade
+      const adminEmails = ['anoopjoy1988@gmail.com'];
+      if (adminEmails.includes(cred.user.email?.toLowerCase() || '')) {
+        try {
+          await setDoc(doc(db, 'users', cred.user.uid), {
+            uid: cred.user.uid,
+            email: cred.user.email,
+            name: cred.user.displayName || cred.user.email?.split('@')[0] || 'Admin',
+            role: 'admin'
+          }, { merge: true });
+        } catch (syncErr) {
+          console.warn("Minor sync error:", syncErr);
+        }
+      }
+      
+      // Verify role
+      const uDoc = await getDoc(doc(db, 'users', cred.user.uid));
+      const userRole = uDoc.exists() ? uDoc.data().role : 'partner';
+      
+      if (userRole === 'admin') {
+        setIsAdminMode(true);
+        setActiveTab('admin_home');
+      } else {
+        setIsAdminMode(false);
+        setActiveTab('partner');
+      }
+      setHasSetInitialTab(true);
+      setIsProcessing(false);
     } catch (e: any) {
       setIsProcessing(false);
       // NativeBiometric throws an error when cancelled
@@ -3697,15 +3691,6 @@ export default function App() {
                         <QRCodeSVG value={`${window.location.origin}/?join=${showJoinQR}`} size={180} />
                       </div>
                       <p className="text-[10px] text-gray-400 font-mono uppercase tracking-widest">Program ID: {showJoinQR}</p>
-                      <button 
-                        onClick={() => {
-                          const prog = programs.find(p => p.id === showJoinQR);
-                          if (prog) joinProgram(prog.id, prog.businessId);
-                        }}
-                        className="w-full py-3 bg-coffee-dark text-white rounded-2xl font-bold text-sm"
-                      >
-                        Simulate Scan (Join)
-                      </button>
                     </motion.div>
                   </motion.div>
                 )}
@@ -3768,7 +3753,7 @@ export default function App() {
                 )}
               </AnimatePresence>
 
-              {/* Simulated Scanner Modal */}
+              {/* Join Success Modal */}
               <AnimatePresence>
                 {justJoined && (
                   <motion.div 
@@ -4147,127 +4132,6 @@ export default function App() {
                               <p className="text-white/60 text-sm font-medium">Point camera at the customer's QR code</p>
                             </div>
                           )}
-                        </div>
-
-                        {/* Simulation Section */}
-                        <div className="max-w-sm mx-auto pt-8 border-t border-white/10 space-y-6 pb-20">
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
-                            <p className="text-xs font-black uppercase tracking-widest text-white/40">Simulate Scan (Test Mode)</p>
-                          </div>
-                        
-                          {(() => {
-                            const bizCards = allCards.filter(c => c.businessId === myBiz?.id);
-                            
-                            const activeCards = bizCards.filter(c => {
-                              const p = programs.find(prog => prog.id === c.programId);
-                              return p?.isActive && !c.isCompleted;
-                            });
-
-                            const closingCards = bizCards.filter(c => {
-                              const p = programs.find(prog => prog.id === c.programId);
-                              return p && !p.isActive && !!p.closedAt && !c.isCompleted;
-                            });
-
-                            const legacyCards = bizCards.filter(c => {
-                              const p = programs.find(prog => prog.id === c.programId);
-                              // Show cards that are either completed OR belong to a dead program (no closedAt)
-                              return c.isCompleted || (p && !p.isActive && !p.closedAt);
-                            });
-
-                            return (
-                              <div className="space-y-4">
-                                {/* No users joined yet helper */}
-                                {activeCards.length === 0 && closingCards.length === 0 && (
-                                  <div className="bg-white/5 border border-white/10 p-6 rounded-[2rem] text-center space-y-4">
-                                    <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center mx-auto text-white/40">
-                                      <Users size={24} />
-                                    </div>
-                                    <div className="space-y-1">
-                                      <p className="text-white font-bold text-sm">No customers yet</p>
-                                      <p className="text-white/40 text-xs">Join your own program to test the stamp flow!</p>
-                                    </div>
-                                    <button 
-                                      onClick={() => {
-                                        const firstProg = myProgs.find(p => p.isActive);
-                                        if (firstProg) joinProgram(firstProg.id, firstProg.businessId);
-                                        else setShowAddProgram(true);
-                                      }}
-                                      className="w-full py-3 bg-white text-black rounded-2xl font-bold text-xs active:scale-95 transition-all"
-                                    >
-                                      {myProgs.some(p => p.isActive) ? 'Join as Test User' : 'Create Program First'}
-                                    </button>
-                                  </div>
-                                )}
-
-                                {/* Active Cards Section */}
-                                {activeCards.length > 0 && (
-                                  <div className="space-y-2">
-                                    <div className="flex items-center justify-between px-2">
-                                      <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Active Cards</p>
-                                      <span className="text-[10px] font-black bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full uppercase">Total: {activeCards.length}</span>
-                                    </div>
-                                    {activeCards.map(card => (
-                                      <button 
-                                        key={card.id}
-                                        onClick={() => addStamp(generateSecureToken(card.id, card.currentStamps))}
-                                        className="w-full flex items-center justify-between py-2 px-4 rounded-xl text-sm font-bold bg-white/10 hover:bg-white/20 text-white transition-colors"
-                                      >
-                                        <span>Scan Card: {card.id.slice(0,6)}...</span>
-                                        <span className="text-[10px] opacity-40">{card.currentStamps} Stamps</span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-
-                                {/* Closing Soon Cards Section */}
-                                {closingCards.length > 0 && (
-                                  <div className="space-y-2">
-                                    <div className="flex items-center justify-between px-2">
-                                      <p className="text-[10px] font-bold uppercase tracking-widest text-orange-400">Closing Soon Cards</p>
-                                      <span className="text-[10px] font-black bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full uppercase">Total: {closingCards.length}</span>
-                                    </div>
-                                    {closingCards.map(card => (
-                                      <button 
-                                        key={card.id}
-                                        onClick={() => addStamp(generateSecureToken(card.id, card.currentStamps))}
-                                        className="w-full flex items-center justify-between py-2 px-4 rounded-xl text-sm font-bold bg-orange-500/10 hover:bg-orange-500/20 text-white transition-colors border border-orange-500/20"
-                                      >
-                                        <span>Scan Card: {card.id.slice(0,6)}...</span>
-                                        <span className="text-[10px] text-orange-400">{card.currentStamps} Stamps</span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-
-                                {/* Legacy/Deleted Cards Section */}
-                                {legacyCards.length > 0 && (
-                                  <div className="space-y-2">
-                                    <div className="flex items-center justify-between px-2">
-                                      <p className="text-[10px] font-bold uppercase tracking-widest text-red-400">Legacy / Deleted (Test)</p>
-                                      <span className="text-[10px] font-black bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full uppercase">Total: {legacyCards.length}</span>
-                                    </div>
-                                    {legacyCards.slice(0, 3).map(card => (
-                                      <button 
-                                        key={card.id}
-                                        onClick={() => addStamp(generateSecureToken(card.id, card.currentStamps))}
-                                        className="w-full flex items-center justify-between py-2 px-4 rounded-xl text-sm font-bold bg-white/5 text-white/30 hover:bg-white/10 transition-colors border border-white/5"
-                                      >
-                                        <span>Scan Card: {card.id.slice(0,6)}...</span>
-                                        <span className="text-[8px] font-black bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded-lg uppercase">
-                                          {card.isCompleted ? 'Completed' : 'Dead'}
-                                        </span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-
-                                {activeCards.length === 0 && closingCards.length === 0 && legacyCards.length === 0 && (
-                                  <p className="text-[10px] text-white/20 italic px-2 py-4">No cards found for simulation.</p>
-                                )}
-                              </div>
-                            );
-                          })()}
                         </div>
                       </div>
                     </div>
@@ -4829,153 +4693,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {showWebBiometricModal && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md"
-          >
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white/90 backdrop-blur-xl border border-gray-100 w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center space-y-6 relative overflow-hidden"
-            >
-              <div className="absolute inset-0 bg-gradient-to-tr from-emerald-50/20 via-transparent to-transparent opacity-50" />
-              
-              <div className="flex items-center justify-between border-b border-gray-100/50 pb-4 relative z-10">
-                <h3 className="text-sm font-bold uppercase tracking-widest text-gray-400">Biometric Authentication</h3>
-                <button 
-                  onClick={() => setShowWebBiometricModal(false)}
-                  className="p-1.5 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
-                >
-                  <X size={14} />
-                </button>
-              </div>
 
-              <div className="relative w-32 h-32 mx-auto flex items-center justify-center z-10">
-                <motion.div 
-                  animate={{ scale: [1, 1.4, 1], opacity: [0.3, 0, 0.3] }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-                  className={`absolute inset-0 rounded-full ${webBiometricSuccess === false ? 'bg-red-500/10' : 'bg-emerald-500/10'}`}
-                />
-                <motion.div 
-                  animate={{ scale: [1.1, 1.6, 1.1], opacity: [0.2, 0, 0.2] }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "easeInOut", delay: 0.5 }}
-                  className={`absolute inset-0 rounded-full ${webBiometricSuccess === false ? 'bg-red-500/5' : 'bg-emerald-500/5'}`}
-                />
-                
-                <div className={`w-24 h-24 rounded-full flex items-center justify-center border-2 shadow-lg transition-colors duration-500 ${
-                  webBiometricSuccess === true ? 'bg-emerald-500 border-emerald-400 text-white' :
-                  webBiometricSuccess === false ? 'bg-red-500 border-red-400 text-white' :
-                  'bg-gray-50 border-gray-100 text-emerald-600'
-                }`}>
-                  <Fingerprint size={48} className={webBiometricSuccess === null ? 'animate-pulse' : ''} />
-                </div>
-
-                {webBiometricSuccess === null && (
-                  <motion.div 
-                    animate={{ top: ['15%', '85%', '15%'] }}
-                    transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
-                    className="absolute left-6 right-6 h-0.5 bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)] z-20"
-                  />
-                )}
-              </div>
-
-              <div className="space-y-1 relative z-10">
-                <h4 className="text-base font-bold text-gray-900">
-                  {webBiometricSuccess === true ? 'Scan Successful' :
-                   webBiometricSuccess === false ? 'Authentication Failed' :
-                   'Place Finger on Sensor'}
-                </h4>
-                <p className="text-xs text-gray-500 max-w-[240px] mx-auto leading-relaxed">
-                  {webBiometricSuccess === true ? 'Logging you in...' :
-                   webBiometricSuccess === false ? 'Fingerprint not recognized. Please try again.' :
-                   'Touch the biometric scanner to simulate authentication.'}
-                </p>
-              </div>
-
-              <div className="flex flex-col gap-2 pt-2 relative z-10">
-                {webBiometricSuccess === null && (
-                  <button 
-                    onClick={async () => {
-                      setWebBiometricSuccess(true);
-                      setTimeout(async () => {
-                        try {
-                          setIsProcessing(true);
-                          if (pendingCredentials) {
-                            const cred = await signInWithEmailAndPassword(auth, pendingCredentials.email, pendingCredentials.pass);
-                            
-                            // Auto-upgrade / routing logic:
-                            const adminEmails = ['anoopjoy1988@gmail.com'];
-                            if (adminEmails.includes(cred.user.email?.toLowerCase() || '')) {
-                              try {
-                                await setDoc(doc(db, 'users', cred.user.uid), {
-                                  uid: cred.user.uid,
-                                  email: cred.user.email,
-                                  name: cred.user.displayName || cred.user.email?.split('@')[0] || 'Admin',
-                                  role: 'admin'
-                                }, { merge: true });
-                              } catch (syncErr) {}
-                            }
-                            
-                            const uDoc = await getDoc(doc(db, 'users', cred.user.uid));
-                            const userRole = uDoc.exists() ? uDoc.data().role : 'partner';
-                            
-                            if (userRole === 'admin') {
-                              setIsAdminMode(true);
-                              setActiveTab('admin_home');
-                            } else {
-                              setIsAdminMode(false);
-                              setActiveTab('partner');
-                            }
-                            setHasSetInitialTab(true);
-                          }
-                          setShowWebBiometricModal(false);
-                        } catch (e: any) {
-                          setAppError(e.message || 'Simulation sign in failed.');
-                          setWebBiometricSuccess(false);
-                          setTimeout(() => {
-                            setWebBiometricSuccess(null);
-                          }, 2000);
-                        } finally {
-                          setIsProcessing(false);
-                        }
-                      }, 1000);
-                    }}
-                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-md active:scale-95 transition-all text-xs"
-                  >
-                    Simulate Successful Scan
-                  </button>
-                )}
-
-                {webBiometricSuccess === null && (
-                  <button 
-                    onClick={() => {
-                      setWebBiometricSuccess(false);
-                      setTimeout(() => {
-                        setWebBiometricSuccess(null);
-                      }, 2000);
-                    }}
-                    className="w-full py-3 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-colors text-xs"
-                  >
-                    Simulate Failed Scan
-                  </button>
-                )}
-
-                <button 
-                  onClick={() => setShowWebBiometricModal(false)}
-                  className="w-full py-3 bg-gray-100 text-gray-500 rounded-xl font-bold active:scale-95 transition-all text-xs"
-                >
-                  Cancel
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Delete Cafe Confirmation Modal */}
       <AnimatePresence>

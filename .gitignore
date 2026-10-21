@@ -7,3 +7,6 @@ coverage/
 .env*
 !.env.example
 .antigravity/
+release-artifacts/
+scratch/
+*.pdf

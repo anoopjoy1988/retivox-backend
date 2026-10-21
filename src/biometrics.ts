@@ -3,12 +3,10 @@ import { Capacitor } from '@capacitor/core';
 
 const SERVER_NAME = 'retivox.app';
 const BIOMETRIC_ENABLED_KEY = 'retivox_biometric_enabled';
-const SIMULATED_CREDS_KEY = 'retivox_simulated_biometric_creds';
 
 export async function isBiometricsAvailable(): Promise<boolean> {
   if (!Capacitor.isNativePlatform()) {
-    // Web Simulation: Biometrics are always supported for developers to preview and test.
-    return true;
+    return false;
   }
   try {
     const result = await NativeBiometric.isAvailable();
@@ -25,11 +23,7 @@ export function hasStoredBiometrics(): boolean {
 
 export async function enableBiometrics(email: string, pass: string): Promise<void> {
   if (!Capacitor.isNativePlatform()) {
-    // Web Simulation: Store credentials in base64 locally for demonstration/testing ease.
-    localStorage.setItem(BIOMETRIC_ENABLED_KEY, 'true');
-    const encrypted = btoa(JSON.stringify({ email, pass }));
-    localStorage.setItem(SIMULATED_CREDS_KEY, encrypted);
-    return;
+    throw new Error('Biometric authentication is only available on mobile devices.');
   }
 
   // Native Platform: Store in device secure enclave (Keystore / Keychain)
@@ -48,7 +42,6 @@ export async function enableBiometrics(email: string, pass: string): Promise<voi
 
 export async function disableBiometrics(): Promise<void> {
   localStorage.removeItem(BIOMETRIC_ENABLED_KEY);
-  localStorage.removeItem(SIMULATED_CREDS_KEY);
 
   if (Capacitor.isNativePlatform()) {
     try {
@@ -68,20 +61,7 @@ export interface BiometricCredentials {
 
 export async function getStoredCredentials(): Promise<BiometricCredentials> {
   if (!Capacitor.isNativePlatform()) {
-    // Web Simulation: Retrieve from localStorage
-    const stored = localStorage.getItem(SIMULATED_CREDS_KEY);
-    if (!stored) {
-      throw new Error('No simulated credentials stored.');
-    }
-    try {
-      const decrypted = JSON.parse(atob(stored));
-      return {
-        email: decrypted.email,
-        pass: decrypted.pass,
-      };
-    } catch (e) {
-      throw new Error('Failed to parse simulated credentials.');
-    }
+    throw new Error('Biometric authentication is only available on mobile devices.');
   }
 
   // Native Platform: Verify biometric credentials via secure prompt
