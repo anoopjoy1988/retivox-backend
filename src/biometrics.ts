@@ -4,6 +4,16 @@ import { Capacitor } from '@capacitor/core';
 const SERVER_NAME = 'retivox.app';
 const BIOMETRIC_ENABLED_KEY = 'retivox_biometric_enabled';
 
+export type BiometricRole = 'admin' | 'partner';
+
+export function getBiometricKey(role: BiometricRole = 'partner'): string {
+  return `retivox_${role}_biometric_enabled`;
+}
+
+export function getServerName(role: BiometricRole = 'partner'): string {
+  return `retivox.app.${role}`;
+}
+
 export async function isBiometricsAvailable(): Promise<boolean> {
   if (!Capacitor.isNativePlatform()) {
     return false;
@@ -17,22 +27,28 @@ export async function isBiometricsAvailable(): Promise<boolean> {
   }
 }
 
-export function hasStoredBiometrics(): boolean {
-  return localStorage.getItem(BIOMETRIC_ENABLED_KEY) === 'true';
+export function hasStoredBiometrics(role?: BiometricRole): boolean {
+  if (role) {
+    return localStorage.getItem(getBiometricKey(role)) === 'true' || localStorage.getItem(BIOMETRIC_ENABLED_KEY) === 'true';
+  }
+  return localStorage.getItem(getBiometricKey('admin')) === 'true' || 
+         localStorage.getItem(getBiometricKey('partner')) === 'true' || 
+         localStorage.getItem(BIOMETRIC_ENABLED_KEY) === 'true';
 }
 
-export async function enableBiometrics(email: string, pass: string): Promise<void> {
+export async function enableBiometrics(email: string, pass: string, role: BiometricRole = 'partner'): Promise<void> {
   if (!Capacitor.isNativePlatform()) {
     throw new Error('Biometric authentication is only available on mobile devices.');
   }
 
-  // Native Platform: Store in device secure enclave (Keystore / Keychain)
+  const server = getServerName(role);
   try {
     await NativeBiometric.setCredentials({
       username: email,
       password: pass,
-      server: SERVER_NAME,
+      server,
     });
+    localStorage.setItem(getBiometricKey(role), 'true');
     localStorage.setItem(BIOMETRIC_ENABLED_KEY, 'true');
   } catch (error: any) {
     console.error('Failed to save credentials natively:', error);
@@ -40,14 +56,24 @@ export async function enableBiometrics(email: string, pass: string): Promise<voi
   }
 }
 
-export async function disableBiometrics(): Promise<void> {
-  localStorage.removeItem(BIOMETRIC_ENABLED_KEY);
+export async function disableBiometrics(role?: BiometricRole): Promise<void> {
+  if (role) {
+    localStorage.removeItem(getBiometricKey(role));
+  } else {
+    localStorage.removeItem(getBiometricKey('admin'));
+    localStorage.removeItem(getBiometricKey('partner'));
+    localStorage.removeItem(BIOMETRIC_ENABLED_KEY);
+  }
 
   if (Capacitor.isNativePlatform()) {
     try {
-      await NativeBiometric.deleteCredentials({
-        server: SERVER_NAME,
-      });
+      if (role) {
+        await NativeBiometric.deleteCredentials({ server: getServerName(role) });
+      } else {
+        await NativeBiometric.deleteCredentials({ server: getServerName('admin') }).catch(() => {});
+        await NativeBiometric.deleteCredentials({ server: getServerName('partner') }).catch(() => {});
+        await NativeBiometric.deleteCredentials({ server: SERVER_NAME }).catch(() => {});
+      }
     } catch (error) {
       console.warn('Native biometric credentials deletion notice:', error);
     }
@@ -59,26 +85,37 @@ export interface BiometricCredentials {
   pass: string;
 }
 
-export async function getStoredCredentials(): Promise<BiometricCredentials> {
+export async function getStoredCredentials(role: BiometricRole = 'partner'): Promise<BiometricCredentials> {
   if (!Capacitor.isNativePlatform()) {
     throw new Error('Biometric authentication is only available on mobile devices.');
   }
 
-  // Native Platform: Verify biometric credentials via secure prompt
   try {
     await NativeBiometric.verifyIdentity({
-      reason: 'Access your account securely',
+      reason: role === 'admin' ? 'Verify identity for Admin Portal' : 'Verify identity for Partner Portal',
       title: 'Biometric Sign In',
-      subtitle: 'Scan your fingerprint or face to log in',
+      subtitle: role === 'admin' ? 'Admin Access' : 'Partner Access',
       description: 'RetivoX secure authentication',
     });
 
-    const creds = await NativeBiometric.getCredentials({
-      server: SERVER_NAME,
-    });
+    let creds: any = null;
+    try {
+      creds = await NativeBiometric.getCredentials({
+        server: getServerName(role),
+      });
+    } catch (_) {
+      // Fallback to legacy single server key if not yet migrated
+      try {
+        creds = await NativeBiometric.getCredentials({
+          server: SERVER_NAME,
+        });
+      } catch (e) {
+        creds = null;
+      }
+    }
 
-    if (!creds.username || !creds.password) {
-      throw new Error('Credentials retrieval failed or empty.');
+    if (!creds || !creds.username || !creds.password) {
+      throw new Error(`No saved biometric credentials found for ${role}. Please sign in with PIN once.`);
     }
 
     return {

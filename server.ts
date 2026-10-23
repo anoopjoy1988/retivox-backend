@@ -617,20 +617,20 @@ async function startServer() {
       }
 
       // Fallback: Read current version from package.json
-      let fallbackVersion = "1.0.4";
+      let fallbackVersion = "1.0.5";
       try {
         const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
         if (pkg.version) fallbackVersion = pkg.version;
       } catch (_) {}
 
-      const playStoreUrl = "https://play.google.com/store/apps/details?id=com.retivox.loyalty";
+      const releaseUrl = `https://github.com/anoopjoy1988/retivox-backend/releases/download/v${fallbackVersion}/RetivoX-v${fallbackVersion}.apk`;
       const hasUpdate = isNewerVersion(fallbackVersion, clientVersion);
       return res.status(200).json({
         hasUpdate,
         latestVersion: fallbackVersion,
         releaseName: `RetivoX v${fallbackVersion}`,
-        releaseNotes: "Latest production version available on Google Play Store with clean biometric authentication and bug fixes.",
-        downloadUrl: playStoreUrl,
+        releaseNotes: "A new update for RetivoX is available with camera and biometric improvements.",
+        downloadUrl: releaseUrl,
         publishedAt: new Date().toISOString()
       });
     } catch (err: any) {

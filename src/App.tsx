@@ -310,7 +310,7 @@ export default function App() {
   const [isDeletingCafe, setIsDeletingCafe] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.4');
+  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.5');
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -539,21 +539,21 @@ export default function App() {
       }
 
       let updateData: AppUpdateInfo | null = null;
-      const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.retivox.loyalty';
+      const releaseUrl = 'https://github.com/anoopjoy1988/retivox-backend/releases/latest';
 
       // 1. Direct Cloud Firestore check (Highest reliability on mobile & web)
       try {
         const updateDoc = await getDoc(doc(db, 'app_updates', 'latest'));
         if (updateDoc.exists()) {
           const data = updateDoc.data();
-          const latestVer = data.latestVersion || '1.0.4';
+          const latestVer = data.latestVersion || '1.0.5';
           const hasUpdate = isNewerVersion(latestVer, currentVer);
           updateData = {
             hasUpdate,
             latestVersion: latestVer,
             releaseName: data.releaseName || `RetivoX v${latestVer}`,
-            releaseNotes: data.releaseNotes || "A new update for RetivoX is available on Google Play Store with latest improvements and fixes.",
-            downloadUrl: data.downloadUrl || playStoreUrl,
+            releaseNotes: data.releaseNotes || "A new update for RetivoX is available with latest improvements and fixes.",
+            downloadUrl: data.downloadUrl || releaseUrl,
             publishedAt: data.updatedAt?.toDate ? data.updatedAt.toDate().toISOString() : new Date().toISOString()
           };
         }
@@ -573,16 +573,16 @@ export default function App() {
         }
       }
 
-      // 3. Fallback: target production release v1.0.4 with Google Play Store link
+      // 3. Fallback: target production release v1.0.5 with GitHub APK link
       if (!updateData) {
-        const fallbackTarget = '1.0.4';
+        const fallbackTarget = '1.0.5';
         const hasUpdate = isNewerVersion(fallbackTarget, currentVer);
         updateData = {
           hasUpdate,
           latestVersion: fallbackTarget,
           releaseName: `RetivoX v${fallbackTarget}`,
-          releaseNotes: "A new update for RetivoX is available on Google Play Store with improvements and fixes.",
-          downloadUrl: playStoreUrl,
+          releaseNotes: "A new update for RetivoX is available with improvements and fixes.",
+          downloadUrl: releaseUrl,
           publishedAt: new Date().toISOString()
         };
       }
@@ -591,10 +591,10 @@ export default function App() {
       if (isAdminMode && (user?.email?.toLowerCase() === 'anoopjoy1988@gmail.com')) {
         try {
           await setDoc(doc(db, 'app_updates', 'latest'), {
-            latestVersion: '1.0.4',
-            releaseName: 'RetivoX v1.0.4',
-            releaseNotes: 'Camera permission fix for Android QR scanner, zero-install customer public join page, and Google Wallet digital passes.',
-            downloadUrl: playStoreUrl,
+            latestVersion: '1.0.5',
+            releaseName: 'RetivoX v1.0.5',
+            releaseNotes: 'Fixed Admin/Partner biometric isolation, resolved auto-prompt on startup, and direct APK in-app updates.',
+            downloadUrl: releaseUrl,
             updatedAt: serverTimestamp()
           }, { merge: true });
         } catch (syncErr) {
@@ -1580,7 +1580,14 @@ export default function App() {
         return;
       }
       setIsProcessing(true);
-      const creds = await getStoredCredentials();
+      const targetRole = authRole === 'admin' ? 'admin' : 'partner';
+      const creds = await getStoredCredentials(targetRole);
+
+      // Verify email belongs to admin if admin role is selected
+      if (targetRole === 'admin' && creds.email.toLowerCase() !== 'anoopjoy1988@gmail.com') {
+        throw new Error("Only anoopjoy1988@gmail.com is authorized for Admin Biometric login.");
+      }
+
       const cred = await signInWithEmailAndPassword(auth, creds.email, creds.pass);
       
       // Admin Auto-Upgrade
@@ -1600,9 +1607,9 @@ export default function App() {
       
       // Verify role
       const uDoc = await getDoc(doc(db, 'users', cred.user.uid));
-      const userRole = uDoc.exists() ? uDoc.data().role : 'partner';
+      const userRole = uDoc.exists() ? uDoc.data().role : targetRole;
       
-      if (userRole === 'admin') {
+      if (userRole === 'admin' || targetRole === 'admin') {
         setIsAdminMode(true);
         setActiveTab('admin_home');
       } else {
@@ -1622,17 +1629,6 @@ export default function App() {
       }
     }
   };
-
-  // Auto-trigger biometric prompt on startup if enabled and user is not logged in (runs only once on initial launch)
-  useEffect(() => {
-    if (!isSplashing && !loading && !user && biometricsEnabled && !hasTriggeredStartupBiometric.current) {
-      hasTriggeredStartupBiometric.current = true;
-      const timer = setTimeout(() => {
-        handleBiometricLogin();
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [isSplashing, loading, user, biometricsEnabled]);
 
   const logout = () => {
     setIsSplashing(true);
@@ -2368,7 +2364,7 @@ export default function App() {
                     className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(16,185,129,0.2)] active:scale-95 disabled:opacity-50 transition-all text-sm"
                   >
                     <Fingerprint size={18} />
-                    Sign In with Fingerprint
+                    {authRole === 'admin' ? 'Sign In as Admin with Fingerprint' : 'Sign In as Partner with Fingerprint'}
                   </button>
                 )}
 
@@ -4664,8 +4660,8 @@ export default function App() {
               <div className="flex flex-col gap-3">
                 <button 
                   onClick={async () => {
-                    try {
-                      await enableBiometrics(promoEmail, promoPassword);
+                      const roleToSave = isAdminMode ? 'admin' : 'partner';
+                      await enableBiometrics(promoEmail, promoPassword, roleToSave);
                       setBiometricsEnabled(true);
                       setShowBiometricPromo(false);
                       setSaveSuccess("Fingerprint login enabled successfully!");
@@ -4748,9 +4744,10 @@ export default function App() {
                     const emailVal = user?.email || profile?.email || '';
                     if (!emailVal) throw new Error("No user email found.");
                     
-                    const secret = pinToSecret(biometricPassword);
+                    const secret = biometricPassword;
                     await signInWithEmailAndPassword(auth, emailVal, secret);
-                    await enableBiometrics(emailVal, secret);
+                    const roleToSave = isAdminMode ? 'admin' : 'partner';
+                    await enableBiometrics(emailVal, secret, roleToSave);
                     setBiometricsEnabled(true);
                     setShowBiometricSetupModal(false);
                     setBiometricPassword('');
@@ -4889,8 +4886,8 @@ export default function App() {
               <div className="flex flex-col gap-2.5 pt-1">
                 <button 
                   onClick={async () => {
-                    const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.retivox.loyalty';
-                    const url = availableUpdate.downloadUrl || playStoreUrl;
+                    const defaultDownloadUrl = 'https://github.com/anoopjoy1988/retivox-backend/releases/latest';
+                    const url = availableUpdate.downloadUrl || defaultDownloadUrl;
                     if (Capacitor.isNativePlatform()) {
                       try {
                         await Browser.open({ url });
