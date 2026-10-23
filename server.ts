@@ -617,7 +617,7 @@ async function startServer() {
       }
 
       // Fallback: Read current version from package.json
-      let fallbackVersion = "1.0.5";
+      let fallbackVersion = "1.0.6";
       try {
         const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
         if (pkg.version) fallbackVersion = pkg.version;
@@ -629,7 +629,7 @@ async function startServer() {
         hasUpdate,
         latestVersion: fallbackVersion,
         releaseName: `RetivoX v${fallbackVersion}`,
-        releaseNotes: "A new update for RetivoX is available with camera and biometric improvements.",
+        releaseNotes: "A new update for RetivoX is available with camera and loyalty pass improvements.",
         downloadUrl: releaseUrl,
         publishedAt: new Date().toISOString()
       });

@@ -12,15 +12,8 @@ import {
   ChevronRight, Star, Clock, MapPin, CheckCircle2, AlertCircle, AlertTriangle, Flag,
   LayoutDashboard, Users, Store, PlusCircle, BarChart3, ShieldCheck, ShieldAlert,
   Smartphone, Scan, X, Edit2, Trash2, Mail, Trophy, Power, ExternalLink,
-  Eye, EyeOff, Fingerprint, Download, Sparkles, RefreshCw, KeyRound, RotateCcw, Lock
+  Eye, EyeOff, Download, Sparkles, RefreshCw, KeyRound, RotateCcw, Lock
 } from 'lucide-react';
-import { 
-  isBiometricsAvailable, 
-  hasStoredBiometrics, 
-  enableBiometrics, 
-  disableBiometrics, 
-  getStoredCredentials 
-} from './biometrics';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { 
   signInWithEmailAndPassword, 
@@ -249,22 +242,7 @@ export default function App() {
   const [user, loading] = useAuthState(auth);
   const [showPassword, setShowPassword] = useState(false);
   
-  // Biometric states
-  const [biometricsAvailable, setBiometricsAvailable] = useState(false);
-  const [biometricsEnabled, setBiometricsEnabled] = useState(false);
-  const [showBiometricPromo, setShowBiometricPromo] = useState(false);
-  const [showBiometricSetupModal, setShowBiometricSetupModal] = useState(false);
-  const [biometricPassword, setBiometricPassword] = useState('');
-  const [promoEmail, setPromoEmail] = useState('');
-  const [promoPassword, setPromoPassword] = useState('');
 
-  // Check biometric support on mount
-  useEffect(() => {
-    isBiometricsAvailable().then(available => {
-      setBiometricsAvailable(available);
-      setBiometricsEnabled(hasStoredBiometrics());
-    });
-  }, []);
   
   useEffect(() => {
     const timer = setTimeout(() => setIsSplashing(false), 2500);
@@ -310,7 +288,7 @@ export default function App() {
   const [isDeletingCafe, setIsDeletingCafe] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.5');
+  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.6');
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -391,7 +369,6 @@ export default function App() {
   const selectedAdminBizIdRef = useRef(selectedAdminBizId);
   const showBusinessSettingsRef = useRef(showBusinessSettings);
   const showSignOutConfirmRef = useRef(showSignOutConfirm);
-  const hasTriggeredStartupBiometric = useRef(false);
   const showTermsRef = useRef(showTerms);
   const showPrivacyRef = useRef(showPrivacy);
   const showDeleteConfirmRef = useRef(showDeleteConfirm);
@@ -546,7 +523,7 @@ export default function App() {
         const updateDoc = await getDoc(doc(db, 'app_updates', 'latest'));
         if (updateDoc.exists()) {
           const data = updateDoc.data();
-          const latestVer = data.latestVersion || '1.0.5';
+          const latestVer = data.latestVersion || '1.0.6';
           const hasUpdate = isNewerVersion(latestVer, currentVer);
           updateData = {
             hasUpdate,
@@ -573,9 +550,9 @@ export default function App() {
         }
       }
 
-      // 3. Fallback: target production release v1.0.5 with GitHub APK link
+      // 3. Fallback: target production release v1.0.6 with GitHub APK link
       if (!updateData) {
-        const fallbackTarget = '1.0.5';
+        const fallbackTarget = '1.0.6';
         const hasUpdate = isNewerVersion(fallbackTarget, currentVer);
         updateData = {
           hasUpdate,
@@ -591,9 +568,9 @@ export default function App() {
       if (isAdminMode && (user?.email?.toLowerCase() === 'anoopjoy1988@gmail.com')) {
         try {
           await setDoc(doc(db, 'app_updates', 'latest'), {
-            latestVersion: '1.0.5',
-            releaseName: 'RetivoX v1.0.5',
-            releaseNotes: 'Fixed Admin/Partner biometric isolation, resolved auto-prompt on startup, and direct APK in-app updates.',
+            latestVersion: '1.0.6',
+            releaseName: 'RetivoX v1.0.6',
+            releaseNotes: 'Clean PIN authentication, zero-install Google Wallet digital passes, camera fixes, and removed biometrics.',
             downloadUrl: releaseUrl,
             updatedAt: serverTimestamp()
           }, { merge: true });
@@ -1311,8 +1288,6 @@ export default function App() {
         console.warn("Error cleaning users:", uErr);
       }
 
-      // Also clear local biometric storage & credentials
-      await disableBiometrics();
       localStorage.clear();
 
       setSaveSuccess(`Database cleaned! Removed ${deletedCount} records. App is now completely fresh.`);
@@ -1415,12 +1390,6 @@ export default function App() {
           setIsAdminMode(false);
           setActiveTab('partner');
         }
-
-        if (biometricsAvailable && !biometricsEnabled) {
-          setPromoEmail(resolvedEmail);
-          setPromoPassword(cleanPin);
-          setShowBiometricPromo(true);
-        }
       } else if (authView === 'signup') {
         const cleanName = displayName.trim();
         const cleanUsername = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
@@ -1498,12 +1467,6 @@ export default function App() {
           setIsAdminMode(false);
           setActiveTab('partner');
         }
-
-        if (biometricsAvailable && !biometricsEnabled) {
-          setPromoEmail(cleanEmail);
-          setPromoPassword(cleanPin);
-          setShowBiometricPromo(true);
-        }
       } else if (authView === 'forgot') {
         let cleanEmail = '';
         if (authRole === 'admin') {
@@ -1569,64 +1532,6 @@ export default function App() {
       setAppError(msg);
     } finally {
       setIsProcessing(false);
-    }
-  };
-
-  const handleBiometricLogin = async () => {
-    setAppError(null);
-    try {
-      if (!Capacitor.isNativePlatform()) {
-        setAppError("Biometric authentication is only available on mobile devices.");
-        return;
-      }
-      setIsProcessing(true);
-      const targetRole = authRole === 'admin' ? 'admin' : 'partner';
-      const creds = await getStoredCredentials(targetRole);
-
-      // Verify email belongs to admin if admin role is selected
-      if (targetRole === 'admin' && creds.email.toLowerCase() !== 'anoopjoy1988@gmail.com') {
-        throw new Error("Only anoopjoy1988@gmail.com is authorized for Admin Biometric login.");
-      }
-
-      const cred = await signInWithEmailAndPassword(auth, creds.email, creds.pass);
-      
-      // Admin Auto-Upgrade
-      const adminEmails = ['anoopjoy1988@gmail.com'];
-      if (adminEmails.includes(cred.user.email?.toLowerCase() || '')) {
-        try {
-          await setDoc(doc(db, 'users', cred.user.uid), {
-            uid: cred.user.uid,
-            email: cred.user.email,
-            name: cred.user.displayName || cred.user.email?.split('@')[0] || 'Admin',
-            role: 'admin'
-          }, { merge: true });
-        } catch (syncErr) {
-          console.warn("Minor sync error:", syncErr);
-        }
-      }
-      
-      // Verify role
-      const uDoc = await getDoc(doc(db, 'users', cred.user.uid));
-      const userRole = uDoc.exists() ? uDoc.data().role : targetRole;
-      
-      if (userRole === 'admin' || targetRole === 'admin') {
-        setIsAdminMode(true);
-        setActiveTab('admin_home');
-      } else {
-        setIsAdminMode(false);
-        setActiveTab('partner');
-      }
-      setHasSetInitialTab(true);
-      setIsProcessing(false);
-    } catch (e: any) {
-      setIsProcessing(false);
-      // NativeBiometric throws an error when cancelled
-      if (e.message && (e.message.toLowerCase().includes('cancel') || e.message.toLowerCase().includes('user limit') || e.message.toLowerCase().includes('not registered'))) {
-        console.log('Biometric authentication cancelled or not set up:', e.message);
-      } else {
-        setAppError(e.message || 'Biometric sign in failed.');
-        setTimeout(() => setAppError(null), 5000);
-      }
     }
   };
 
@@ -1803,7 +1708,6 @@ export default function App() {
   const handleSignOut = async () => {
     setShowSignOutConfirm(false);
     try {
-      hasTriggeredStartupBiometric.current = true;
       await signOut(auth);
       setIsAdminMode(false);
       setSelectedAdminBizId(null);
@@ -2259,7 +2163,7 @@ export default function App() {
 
             {authView === 'login' && authRole === 'partner' && (
               <p className="text-xs text-gray-500 mb-1 leading-relaxed">
-                Sign in with your short username and 6-digit PIN, or tap your fingerprint below.
+                Sign in with your short username and 6-digit PIN.
               </p>
             )}
 
@@ -2356,17 +2260,6 @@ export default function App() {
                     </>
                   )}
                 </button>
-
-                {biometricsEnabled && (
-                  <button 
-                    onClick={handleBiometricLogin}
-                    disabled={isProcessing}
-                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-[0_8px_20px_rgba(16,185,129,0.2)] active:scale-95 disabled:opacity-50 transition-all text-sm"
-                  >
-                    <Fingerprint size={18} />
-                    {authRole === 'admin' ? 'Sign In as Admin with Fingerprint' : 'Sign In as Partner with Fingerprint'}
-                  </button>
-                )}
 
                 <div className="flex flex-col items-center gap-2 pt-1">
                   {authRole !== 'admin' && (
@@ -3063,22 +2956,6 @@ export default function App() {
               <p className="text-gray-500 text-xs mb-6">{profile?.email}</p>
               
               <div className="w-full space-y-2 mb-6 max-w-xs">
-                {biometricsAvailable && (
-                  <button 
-                    onClick={() => {
-                      if (biometricsEnabled) {
-                        disableBiometrics().then(() => setBiometricsEnabled(false));
-                      } else {
-                        setBiometricPassword('');
-                        setShowBiometricSetupModal(true);
-                      }
-                    }}
-                    className={`w-full py-3 ${biometricsEnabled ? 'bg-emerald-50 text-emerald-700 border border-emerald-100 hover:bg-emerald-100/50' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'} rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm`}
-                  >
-                    <Fingerprint size={18} className={biometricsEnabled ? 'text-emerald-600' : 'text-gray-500'} />
-                    {biometricsEnabled ? 'Fingerprint Login Enabled' : 'Enable Fingerprint Login'}
-                  </button>
-                )}
                 <button 
                   onClick={() => setShowPrivacy(true)}
                   className="w-full py-3 bg-gray-100 text-gray-700 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm"
@@ -4500,22 +4377,6 @@ export default function App() {
             <p className="text-gray-500 text-xs mb-6">{profile?.email}</p>
             
             <div className="w-full space-y-2 mb-6 max-w-xs">
-              {biometricsAvailable && (
-                <button 
-                  onClick={() => {
-                    if (biometricsEnabled) {
-                      disableBiometrics().then(() => setBiometricsEnabled(false));
-                    } else {
-                      setBiometricPassword('');
-                      setShowBiometricSetupModal(true);
-                    }
-                  }}
-                  className={`w-full py-3 ${biometricsEnabled ? 'bg-emerald-50 text-emerald-700 border border-emerald-100 hover:bg-emerald-100/50' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'} rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm`}
-                >
-                  <Fingerprint size={18} className={biometricsEnabled ? 'text-emerald-600' : 'text-gray-500'} />
-                  {biometricsEnabled ? 'Fingerprint Login Enabled' : 'Enable Fingerprint Login'}
-                </button>
-              )}
               <button 
                 onClick={() => setShowPrivacy(true)} 
                 className="w-full py-3 bg-gray-100 text-gray-700 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm hover:bg-gray-200"
@@ -4633,151 +4494,9 @@ export default function App() {
         )}
       </nav>
 
-      {/* Biometric Prompts and Modals */}
-      <AnimatePresence>
-        {showBiometricPromo && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl space-y-6 text-center"
-            >
-              <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner shadow-emerald-100">
-                <Fingerprint size={40} className="animate-pulse text-emerald-500" />
-              </div>
-              <div className="space-y-2">
-                <h3 className="text-xl font-bold text-gray-900">Enable Fingerprint Login?</h3>
-                <p className="text-sm text-gray-500 leading-relaxed">
-                  Would you like to enable quick fingerprint login for next time? This allows you to skip typing your 6-digit PIN and sign in instantly.
-                </p>
-              </div>
-              <div className="flex flex-col gap-3">
-                <button 
-                  onClick={async () => {
-                      const roleToSave = isAdminMode ? 'admin' : 'partner';
-                      await enableBiometrics(promoEmail, promoPassword, roleToSave);
-                      setBiometricsEnabled(true);
-                      setShowBiometricPromo(false);
-                      setSaveSuccess("Fingerprint login enabled successfully!");
-                      setTimeout(() => setSaveSuccess(null), 3000);
-                    } catch (err: any) {
-                      setAppError(err.message || "Failed to enable fingerprint login.");
-                      setTimeout(() => setAppError(null), 4000);
-                    }
-                  }}
-                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 active:scale-95 transition-all text-sm"
-                >
-                  Enable Fingerprint
-                </button>
-                <button 
-                  onClick={() => setShowBiometricPromo(false)}
-                  className="w-full py-4 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-2xl font-bold active:scale-95 transition-all text-sm"
-                >
-                  Maybe Later
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
-      <AnimatePresence>
-        {showBiometricSetupModal && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl space-y-6 text-left"
-            >
-              <div className="flex items-center justify-between border-b border-gray-100 pb-4">
-                <h3 className="text-lg font-bold text-gray-900">Verify 6-Digit PIN</h3>
-                <button onClick={() => setShowBiometricSetupModal(false)} className="p-1.5 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors"><X size={16} /></button>
-              </div>
-              
-              <p className="text-xs text-gray-500 leading-relaxed">
-                To securely store your credentials in your device's biometric vault, please confirm your 6-digit PIN:
-              </p>
 
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-widest flex items-center gap-1">
-                  <KeyRound size={12} />
-                  6-Digit PIN
-                </label>
-                <div className="relative">
-                  <input 
-                    type={showPin ? "text" : "password"}
-                    inputMode="numeric"
-                    maxLength={6}
-                    pattern="[0-9]*"
-                    value={biometricPassword}
-                    onChange={(e) => setBiometricPassword(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="••••••"
-                    className="w-full px-4 py-3 text-center tracking-[0.6em] font-mono font-bold text-base bg-gray-50 border border-gray-100 rounded-xl focus:ring-2 focus:ring-coffee-accent focus:border-transparent outline-none transition-all pr-12"
-                  />
-                  <button 
-                    type="button"
-                    onClick={() => setShowPin(!showPin)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                  >
-                    {showPin ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </div>
 
-              <button 
-                onClick={async () => {
-                  if (!biometricPassword || biometricPassword.length !== 6) return;
-                  setIsProcessing(true);
-                  try {
-                    const emailVal = user?.email || profile?.email || '';
-                    if (!emailVal) throw new Error("No user email found.");
-                    
-                    const secret = biometricPassword;
-                    await signInWithEmailAndPassword(auth, emailVal, secret);
-                    const roleToSave = isAdminMode ? 'admin' : 'partner';
-                    await enableBiometrics(emailVal, secret, roleToSave);
-                    setBiometricsEnabled(true);
-                    setShowBiometricSetupModal(false);
-                    setBiometricPassword('');
-                    
-                    setSaveSuccess("Fingerprint login enabled successfully!");
-                    setTimeout(() => setSaveSuccess(null), 3000);
-                  } catch (err: any) {
-                    let msg = err.message || "Failed to verify 6-digit PIN.";
-                    if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-                      msg = "Incorrect 6-digit PIN. Please try again.";
-                    }
-                    setAppError(msg);
-                    setTimeout(() => setAppError(null), 4000);
-                  } finally {
-                    setIsProcessing(false);
-                  }
-                }}
-                disabled={isProcessing || biometricPassword.length !== 6}
-                className="w-full py-3.5 bg-coffee-dark hover:bg-opacity-95 text-white rounded-2xl font-bold shadow-lg active:scale-95 disabled:opacity-50 transition-all text-sm flex items-center justify-center gap-2"
-              >
-                {isProcessing ? (
-                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                   "Confirm & Enable"
-                )}
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
 
 
