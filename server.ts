@@ -167,27 +167,9 @@ async function startServer() {
 
   app.use(express.json());
 
-  // 1. CORS Configuration (Allows local Capacitor app WebView requests)
+  // 1. CORS Configuration (Allows mobile web, deployed domains, and Capacitor app)
   app.use(cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      const allowedOrigins = [
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "capacitor://localhost",
-        "http://localhost"
-      ];
-      const isLocalhost = origin.startsWith("http://localhost:") || 
-                          origin.startsWith("http://127.0.0.1:") ||
-                          origin.startsWith("http://192.168.") ||
-                          origin.startsWith("capacitor://");
-      
-      if (allowedOrigins.includes(origin) || isLocalhost) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
+    origin: true,
     credentials: true
   }));
 
@@ -635,7 +617,7 @@ async function startServer() {
       }
 
       // Fallback: Read current version from package.json
-      let fallbackVersion = "1.0.3";
+      let fallbackVersion = "1.0.4";
       try {
         const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
         if (pkg.version) fallbackVersion = pkg.version;
@@ -700,206 +682,17 @@ async function startServer() {
       }
 
       if (type === 'google') {
-        const issuerId = process.env.GOOGLE_WALLET_ISSUER_ID;
-        const serviceAccountKey = process.env.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY;
-        const serviceAccountEmail = process.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL;
-
-        if (!issuerId) {
-          return res.status(200).json({ 
-            message: "Google Wallet integration is ready! To enable real pass generation, please configure GOOGLE_WALLET_ISSUER_ID in your app settings.",
-            details: { cardId, businessName, platform: 'Google' }
-          });
-        }
-
-        try {
-          // Google Wallet IDs can only contain alphanumeric characters, underscores, and hyphens.
-          const sanitizeId = (id: string) => (id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-          
-          const sBusinessId = sanitizeId(businessId || 'business');
-          const sProgramId = sanitizeId(programId || 'program');
-          const sCardId = sanitizeId(cardId || 'card');
-
-          const classId = `${issuerId}.${sBusinessId}_${sProgramId}`;
-          const objectId = `${issuerId}.${sCardId}`;
-
-          console.log("\n=== GOOGLE WALLET PASS GENERATION ===");
-          console.log("Original Business ID:", businessId, "-> Sanitized:", sBusinessId);
-          console.log("Original Program ID:", programId, "-> Sanitized:", sProgramId);
-          console.log("Final Class ID:", classId);
-          console.log("Final Object ID:", objectId);
-          console.log("=====================================\n");
-
-          const now = Math.floor(Date.now() / 1000);
-          let jwt = '';
-          let clientEmail = '';
-
-          if (serviceAccountKey) {
-            let privateKey: string;
-
-            // Parse JSON if it is a service account credentials JSON string
-            const trimmedKey = serviceAccountKey.trim();
-            if (trimmedKey.startsWith('{')) {
-              const credentials = JSON.parse(trimmedKey);
-              privateKey = credentials.private_key;
-              clientEmail = credentials.client_email;
-            } else {
-              // Fallback: If they provided private key directly
-              privateKey = serviceAccountKey;
-              clientEmail = serviceAccountEmail || "service-account@developer.gserviceaccount.com";
-            }
-
-            if (!privateKey) {
-              throw new Error("Private key is missing from GOOGLE_WALLET_SERVICE_ACCOUNT_KEY");
-            }
-
-            const cleanPrivateKey = privateKey.replace(/\\n/g, '\n');
-
-            const jwtPayload = {
-              iss: clientEmail,
-              aud: 'google',
-              origins: [],
-              typ: 'savetowallet',
-              payload: {
-                loyaltyClasses: [
-                  {
-                    id: classId,
-                    issuerName: businessName || "RetivoX Loyalty",
-                    programName: programTitle || "RetivoX Loyalty Program",
-                    providerName: "RetivoX",
-                    reviewStatus: 'UNDER_REVIEW',
-                    programLogo: {
-                      sourceUri: {
-                        uri: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
-                      },
-                      contentDescription: {
-                        defaultValue: {
-                          language: 'en',
-                          value: 'Logo'
-                        }
-                      }
-                    }
-                  }
-                ],
-                loyaltyObjects: [
-                  {
-                    id: objectId,
-                    classId: classId,
-                    state: 'ACTIVE',
-                    barcode: {
-                      type: 'QR_CODE',
-                      value: cardId
-                    },
-                    accountId: cardId,
-                    accountName: "Loyalty Pass",
-                    loyaltyPoints: {
-                      label: 'Stamps',
-                      balance: {
-                        string: `${currentStamps || 0}/${goal || 10}`
-                      }
-                    }
-                  }
-                ]
-              },
-              iat: now,
-              exp: now + 3600
-            };
-
-            jwt = signGoogleWalletJwt(jwtPayload, cleanPrivateKey, clientEmail);
-          } else if (serviceAccountEmail) {
-            clientEmail = serviceAccountEmail;
-            console.log(`Generating Google Wallet pass using keyless IAM signing for service account: ${serviceAccountEmail}`);
-            
-            const auth = new GoogleAuth({
-              scopes: ['https://www.googleapis.com/auth/cloud-platform']
-            });
-            const authClient = await auth.getClient();
-            const iamcredentials = google.iamcredentials({
-              version: 'v1',
-              auth: authClient as any
-            });
-
-            const jwtPayload = {
-              iss: serviceAccountEmail,
-              aud: 'google',
-              origins: [],
-              typ: 'savetowallet',
-              payload: {
-                loyaltyClasses: [
-                  {
-                    id: classId,
-                    issuerName: businessName || "RetivoX Loyalty",
-                    programName: programTitle || "RetivoX Loyalty Program",
-                    providerName: "RetivoX",
-                    reviewStatus: 'UNDER_REVIEW',
-                    programLogo: {
-                      sourceUri: {
-                        uri: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
-                      },
-                      contentDescription: {
-                        defaultValue: {
-                          language: 'en',
-                          value: 'Logo'
-                        }
-                      }
-                    }
-                  }
-                ],
-                loyaltyObjects: [
-                  {
-                    id: objectId,
-                    classId: classId,
-                    state: 'ACTIVE',
-                    barcode: {
-                      type: 'QR_CODE',
-                      value: cardId
-                    },
-                    accountId: cardId,
-                    accountName: "Loyalty Pass",
-                    loyaltyPoints: {
-                      label: 'Stamps',
-                      balance: {
-                        string: `${currentStamps || 0}/${goal || 10}`
-                      }
-                    }
-                  }
-                ]
-              },
-              iat: now,
-              exp: now + 3600
-            };
-
-            const iamResponse = await iamcredentials.projects.serviceAccounts.signJwt({
-              name: `projects/-/serviceAccounts/${serviceAccountEmail}`,
-              requestBody: {
-                payload: JSON.stringify(jwtPayload)
-              }
-            });
-
-            if (!iamResponse.data.signedJwt) {
-              throw new Error("Failed to sign JWT using Google Cloud IAM Credentials API");
-            }
-            jwt = iamResponse.data.signedJwt;
-          } else {
-            return res.status(200).json({ 
-              message: "Google Wallet integration is ready! To enable real pass generation, please configure either GOOGLE_WALLET_SERVICE_ACCOUNT_KEY or GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL in your app settings.",
-              details: { cardId, businessName, platform: 'Google' }
-            });
-          }
-
-          const saveUrl = `https://pay.google.com/gp/v/save/${jwt}`;
-
-          return res.status(200).json({
-            saveUrl,
-            details: { cardId, businessName, classId, objectId }
-          });
-
-        } catch (jwtError: any) {
-          console.error("JWT Sign Error:", jwtError);
-          return res.status(500).json({
-            error: "Failed to generate signed Google Wallet pass",
-            details: jwtError.message
-          });
-        }
+        const result = await buildGoogleWalletPassJwt({
+          cardId,
+          businessName,
+          programTitle,
+          currentStamps,
+          goal,
+          businessId,
+          programId,
+          businessLogo: cardData?.businessLogo
+        });
+        return res.status(200).json(result);
       } else if (type === 'apple') {
         return res.status(200).json({
           message: "Apple Wallet integration requires an Apple Developer account, a Pass Type ID, and a signing certificate (.p12). Once you have these, we can implement the .pkpass generation logic.",
@@ -911,9 +704,269 @@ async function startServer() {
         message: `Pass generation for ${type} is initialized. In a production environment, this would now download your secure digital pass.`,
         details: { cardId, businessName }
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Wallet Error:", error);
-      res.status(500).json({ error: "Failed to generate wallet pass" });
+      res.status(500).json({ error: "Failed to generate wallet pass", details: error?.message });
+    }
+  });
+
+  // Reusable Google Wallet Generator
+  async function buildGoogleWalletPassJwt(params: {
+    cardId: string;
+    businessName: string;
+    programTitle: string;
+    currentStamps: number;
+    goal: number;
+    businessId: string;
+    programId: string;
+    businessLogo?: string;
+  }) {
+    const issuerId = process.env.GOOGLE_WALLET_ISSUER_ID;
+    const serviceAccountKey = process.env.GOOGLE_WALLET_SERVICE_ACCOUNT_KEY;
+    const serviceAccountEmail = process.env.GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL;
+
+    if (!issuerId) {
+      return { 
+        message: "Google Wallet integration is ready! To enable real pass generation, please configure GOOGLE_WALLET_ISSUER_ID in your app settings.",
+        details: { cardId: params.cardId, businessName: params.businessName, platform: 'Google' }
+      };
+    }
+
+    const sanitizeId = (id: string) => (id || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const sBusinessId = sanitizeId(params.businessId || 'business');
+    const sProgramId = sanitizeId(params.programId || 'program');
+    const sCardId = sanitizeId(params.cardId || 'card');
+
+    const classId = `${issuerId}.${sBusinessId}_${sProgramId}`;
+    const objectId = `${issuerId}.${sCardId}`;
+
+    const now = Math.floor(Date.now() / 1000);
+    let jwt = '';
+
+    const logoUri = params.businessLogo && params.businessLogo.startsWith('http') 
+      ? params.businessLogo 
+      : 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80';
+
+    const jwtPayload = {
+      iss: '',
+      aud: 'google',
+      origins: [],
+      typ: 'savetowallet',
+      payload: {
+        loyaltyClasses: [
+          {
+            id: classId,
+            issuerName: params.businessName || "RetivoX Loyalty",
+            programName: params.programTitle || "RetivoX Loyalty Program",
+            providerName: "RetivoX",
+            reviewStatus: 'UNDER_REVIEW',
+            programLogo: {
+              sourceUri: { uri: logoUri },
+              contentDescription: { defaultValue: { language: 'en', value: 'Logo' } }
+            }
+          }
+        ],
+        loyaltyObjects: [
+          {
+            id: objectId,
+            classId: classId,
+            state: 'ACTIVE',
+            barcode: {
+              type: 'QR_CODE',
+              value: `card:${params.cardId}`
+            },
+            accountId: params.cardId,
+            accountName: "Loyalty Pass",
+            loyaltyPoints: {
+              label: 'Stamps',
+              balance: {
+                string: `${params.currentStamps || 0}/${params.goal || 10}`
+              }
+            }
+          }
+        ]
+      },
+      iat: now,
+      exp: now + 3600
+    };
+
+    if (serviceAccountKey) {
+      let privateKey: string;
+      let clientEmail: string;
+      const trimmedKey = serviceAccountKey.trim();
+      if (trimmedKey.startsWith('{')) {
+        const credentials = JSON.parse(trimmedKey);
+        privateKey = credentials.private_key;
+        clientEmail = credentials.client_email;
+      } else {
+        privateKey = serviceAccountKey;
+        clientEmail = serviceAccountEmail || "service-account@developer.gserviceaccount.com";
+      }
+
+      if (!privateKey) throw new Error("Private key is missing from GOOGLE_WALLET_SERVICE_ACCOUNT_KEY");
+      jwtPayload.iss = clientEmail;
+      jwt = signGoogleWalletJwt(jwtPayload, privateKey.replace(/\\n/g, '\n'), clientEmail);
+    } else if (serviceAccountEmail) {
+      jwtPayload.iss = serviceAccountEmail;
+      const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+      const authClient = await auth.getClient();
+      const iamcredentials = google.iamcredentials({ version: 'v1', auth: authClient as any });
+      const iamResponse = await iamcredentials.projects.serviceAccounts.signJwt({
+        name: `projects/-/serviceAccounts/${serviceAccountEmail}`,
+        requestBody: { payload: JSON.stringify(jwtPayload) }
+      });
+      if (!iamResponse.data.signedJwt) throw new Error("Failed to sign JWT using Google Cloud IAM Credentials API");
+      jwt = iamResponse.data.signedJwt;
+    } else {
+      return { 
+        message: "Google Wallet integration is ready! To enable real pass generation, please configure either GOOGLE_WALLET_SERVICE_ACCOUNT_KEY or GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL in your app settings.",
+        details: { cardId: params.cardId, businessName: params.businessName, platform: 'Google' }
+      };
+    }
+
+    const saveUrl = `https://pay.google.com/gp/v/save/${jwt}`;
+    return {
+      saveUrl,
+      details: { cardId: params.cardId, businessName: params.businessName, classId, objectId }
+    };
+  }
+
+  // --- Public Customer Endpoints (Zero-Install Experience) ---
+
+  // 1. Get Program & Business Details publicly
+  app.get("/api/public/program/:programId", async (req: express.Request, res: express.Response) => {
+    try {
+      const { programId } = req.params;
+      const db = getAdminDb();
+      if (!db) return res.status(500).json({ error: "Database not available" });
+
+      const progDoc = await db.collection("programs").doc(programId).get();
+      if (!progDoc.exists) return res.status(404).json({ error: "Program not found" });
+
+      const progData: any = progDoc.data();
+      let business: any = { name: "Loyalty Program", location: "" };
+
+      if (progData.businessId) {
+        const bizDoc = await db.collection("businesses").doc(progData.businessId).get();
+        if (bizDoc.exists) {
+          business = { id: bizDoc.id, ...bizDoc.data() };
+        }
+      }
+
+      res.status(200).json({
+        program: { id: progDoc.id, ...progData },
+        business
+      });
+    } catch (err: any) {
+      console.error("Public get program error:", err);
+      res.status(500).json({ error: "Failed to load program", details: err?.message });
+    }
+  });
+
+  // 2. Public Join & Instant Google Wallet Pass
+  app.post("/api/public/join-pass", async (req: express.Request, res: express.Response) => {
+    try {
+      const { programId, customerId, passType } = req.body;
+      if (!programId) return res.status(400).json({ error: "programId is required" });
+
+      const db = getAdminDb();
+      if (!db) return res.status(500).json({ error: "Database not available" });
+
+      const progDoc = await db.collection("programs").doc(programId).get();
+      if (!progDoc.exists) return res.status(404).json({ error: "Program not found" });
+      const progData: any = progDoc.data();
+
+      let bizData: any = {};
+      if (progData.businessId) {
+        const bizDoc = await db.collection("businesses").doc(progData.businessId).get();
+        if (bizDoc.exists) bizData = { id: bizDoc.id, ...bizDoc.data() };
+      }
+
+      let cardData: any = null;
+      let cardId = "";
+
+      // Check if this customer already has a card for this program
+      if (customerId) {
+        const existingSnap = await db.collection("loyaltyCards")
+          .where("programId", "==", programId)
+          .where("userId", "==", customerId)
+          .limit(1)
+          .get();
+        if (!existingSnap.empty) {
+          cardId = existingSnap.docs[0].id;
+          cardData = existingSnap.docs[0].data();
+        }
+      }
+
+      // If no card, create one instantly
+      if (!cardData) {
+        const newUserId = customerId || `cust_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        const newCard = {
+          userId: newUserId,
+          programId,
+          businessId: progData.businessId || "",
+          businessOwnerId: bizData.ownerId || "",
+          businessName: bizData.name || "Cafe",
+          businessLogo: bizData.logoUrl || "",
+          programTitle: progData.title || "Loyalty Pass",
+          itemName: progData.itemName || "Item",
+          goal: progData.goal || 10,
+          currentStamps: 0,
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp()
+        };
+        const ref = await db.collection("loyaltyCards").add(newCard);
+        cardId = ref.id;
+        cardData = newCard;
+      }
+
+      let walletResult: any = null;
+      if (passType === 'google') {
+        walletResult = await buildGoogleWalletPassJwt({
+          cardId,
+          businessName: cardData.businessName,
+          programTitle: cardData.programTitle,
+          currentStamps: cardData.currentStamps,
+          goal: cardData.goal,
+          businessId: cardData.businessId,
+          programId: cardData.programId,
+          businessLogo: cardData.businessLogo
+        });
+      }
+
+      res.status(200).json({
+        cardId,
+        card: { id: cardId, ...cardData },
+        wallet: walletResult
+      });
+    } catch (err: any) {
+      console.error("Public join error:", err);
+      res.status(500).json({ error: "Failed to join pass", details: err?.message });
+    }
+  });
+
+  // 3. Public Card Status (for live syncing stamps on the customer's screen)
+  app.get("/api/public/card/:cardId", async (req: express.Request, res: express.Response) => {
+    try {
+      const { cardId } = req.params;
+      const db = getAdminDb();
+      if (!db) return res.status(500).json({ error: "Database not available" });
+
+      const cardDoc = await db.collection("loyaltyCards").doc(cardId).get();
+      if (!cardDoc.exists) return res.status(404).json({ error: "Card not found" });
+
+      const cardData: any = cardDoc.data();
+      res.status(200).json({
+        id: cardDoc.id,
+        currentStamps: cardData.currentStamps,
+        goal: cardData.goal,
+        isCompleted: cardData.isCompleted || false,
+        businessName: cardData.businessName,
+        programTitle: cardData.programTitle,
+        itemName: cardData.itemName,
+        businessLogo: cardData.businessLogo
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to fetch card", details: err?.message });
     }
   });
 

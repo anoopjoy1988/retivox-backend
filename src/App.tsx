@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, ReactNode, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
+import { PublicCustomerPassView } from './components/PublicCustomerPassView';
 import { Browser } from '@capacitor/browser';
 import { App as CapApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
@@ -270,21 +271,15 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
-  // Parse URL Query Parameters on Startup
-  useEffect(() => {
+  // Public join program ID for zero-install customer passes
+  const [publicJoinId, setPublicJoinId] = useState<string | null>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const joinId = params.get('join');
-      if (joinId) {
-        localStorage.setItem('pending_join_program_id', joinId);
-        // Clean URL to keep it pretty
-        const newUrl = window.location.origin + window.location.pathname;
-        window.history.replaceState({}, document.title, newUrl);
-      }
-    } catch (err) {
-      console.warn("Failed to check URL query parameters on startup:", err);
+      return params.get('join');
+    } catch (_) {
+      return null;
     }
-  }, []);
+  });
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('partner');
   const [businesses, setBusinesses] = useState<Business[]>([]);
@@ -315,7 +310,7 @@ export default function App() {
   const [isDeletingCafe, setIsDeletingCafe] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.3');
+  const [installedAppVersion, setInstalledAppVersion] = useState('1.0.4');
   const [showBusinessSettings, setShowBusinessSettings] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -530,7 +525,7 @@ export default function App() {
     try {
       if (isManual) setIsCheckingUpdate(true);
 
-      let currentVer = installedAppVersion || '1.0.3';
+      let currentVer = installedAppVersion || '1.0.4';
       if (Capacitor.isNativePlatform()) {
         try {
           const info = await CapApp.getInfo();
@@ -551,7 +546,7 @@ export default function App() {
         const updateDoc = await getDoc(doc(db, 'app_updates', 'latest'));
         if (updateDoc.exists()) {
           const data = updateDoc.data();
-          const latestVer = data.latestVersion || '1.0.3';
+          const latestVer = data.latestVersion || '1.0.4';
           const hasUpdate = isNewerVersion(latestVer, currentVer);
           updateData = {
             hasUpdate,
@@ -578,9 +573,9 @@ export default function App() {
         }
       }
 
-      // 3. Fallback: target production release v1.0.3 with Google Play Store link
+      // 3. Fallback: target production release v1.0.4 with Google Play Store link
       if (!updateData) {
-        const fallbackTarget = '1.0.3';
+        const fallbackTarget = '1.0.4';
         const hasUpdate = isNewerVersion(fallbackTarget, currentVer);
         updateData = {
           hasUpdate,
@@ -596,9 +591,9 @@ export default function App() {
       if (isAdminMode && (user?.email?.toLowerCase() === 'anoopjoy1988@gmail.com')) {
         try {
           await setDoc(doc(db, 'app_updates', 'latest'), {
-            latestVersion: '1.0.3',
-            releaseName: 'RetivoX v1.0.3',
-            releaseNotes: 'Performance improvements, clean Play Store production build, and enhanced security.',
+            latestVersion: '1.0.4',
+            releaseName: 'RetivoX v1.0.4',
+            releaseNotes: 'Camera permission fix for Android QR scanner, zero-install customer public join page, and Google Wallet digital passes.',
             downloadUrl: playStoreUrl,
             updatedAt: serverTimestamp()
           }, { merge: true });
@@ -1005,7 +1000,7 @@ export default function App() {
             if (!isMounted || isProcessingScan.current) return;
             
             // Handle scan result
-            if (decodedText.startsWith('v1:') || decodedText.startsWith('card:')) {
+            if (decodedText.startsWith('v1:') || decodedText.startsWith('card:') || decodedText.length >= 10) {
               isProcessingScan.current = true;
               setIsProcessing(true);
               // Shut down the camera stream immediately so the device is released instantly
@@ -1914,6 +1909,9 @@ export default function App() {
 
   const addStamp = async (tokenOrId: string) => {
     let cardId = tokenOrId;
+    if (tokenOrId.startsWith('card:')) {
+      cardId = tokenOrId.replace('card:', '').trim();
+    }
     
     // Validate if it's a secure token
     if (tokenOrId.startsWith('v1:')) {
@@ -1936,7 +1934,7 @@ export default function App() {
     // Search in allCards (since partner is scanning a customer)
     const card = allCards.find(c => c.id === cardId);
     if (!card) {
-      const msg = "Card not found. Please ensure the customer is using the RetivoX app.";
+      const msg = "Card not found. Please ensure the QR code is a valid loyalty card.";
       setScanResult(`Error: ${msg}`);
       setStampError(msg);
       
@@ -2118,6 +2116,20 @@ export default function App() {
       <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }} className="w-12 h-12 border-4 border-coffee-dark border-t-transparent rounded-full" />
     </div>
   );
+
+  if (publicJoinId) {
+    return (
+      <PublicCustomerPassView 
+        programId={publicJoinId}
+        onSwitchToOwner={() => {
+          setPublicJoinId(null);
+          localStorage.removeItem('pending_join_program_id');
+          const newUrl = window.location.origin + window.location.pathname;
+          window.history.replaceState({}, document.title, newUrl);
+        }}
+      />
+    );
+  }
 
   if (!user || isDeletingAccountFlow) return (
     <div className="h-screen bg-white flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto relative overflow-hidden shadow-2xl">
